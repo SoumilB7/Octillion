@@ -58,6 +58,15 @@ npm start             # stdio MCP server
 npm run start:http    # Streamable HTTP at http://127.0.0.1:3333/mcp + browser preview at /preview
 ```
 
+### boat.dev sandbox tools
+
+The main MCP server exposes Boat sandbox tools through the official `@boatdev/sdk` TypeScript client. Set `BOAT_MCP_ENABLED=true` and `BOAT_API_KEY` in the ignored local `.env`; create a key in the Boat dashboard or with `boat api-key create`. `BOAT_BASE_URL` defaults to `https://boat.dev/api/v1`. Keys are read from the process environment and are never stored in source control. The router provides account/limit inspection, sandbox lifecycle, command and file operations, agent prompts, prompt status, events, and usage.
+
+Boat sandboxes use billable compute. Stop archives a sandbox so it can be resumed later; delete irreversibly removes a sandbox and its snapshots and requires repeating its ID for confirmation. Treat API keys, secrets, and returned desktop URLs as sensitive. Use a least-privilege Boat API key. See the [Boat TypeScript SDK guide](https://docs.boat.dev/sdks/typescript) for current SDK authentication and operations.
+
+Pi.dev is integrated as the agent client/runtime, replacing the embedded Python MCP bridge. The project config at `.pi/mcp.json` starts Octillion over stdio and exposes its tools through Pi codemode; scripts can compose calls and filter results before returning summaries to the model. This reduces model context and orchestration overhead while Octillion remains the API/data server. Pi project resources include the `/boat` and `/traces` prompt commands plus Octillion and Boat skills. Install Pi using the [Pi quickstart](https://pi.dev/docs/latest/quickstart), run `pi` from the repository, trust the project resources, and use `/mcp` to inspect the Octillion connection. See the [Pi MCP guide](https://pi.dev/docs/latest/mcp) for exposure behavior.
+
+### Database
 | Service | URL | Login |
 |---|---|---|
 | Langfuse | http://localhost:3000 | `admin@devtools.local` / `devtools-admin` (project `devtools`) |
@@ -85,6 +94,16 @@ Add the server to any MCP host that renders MCP Apps / MCP-UI (e.g. Claude, VS C
 ## Layout
 
 ```
+sql/schema.sql      tables for the four contexts
+sql/seed.sql        sample data (product "Tracelight", 8 accounts, population segments, ~260 sessions / ~900 runs)
+src/db.ts           pg or PGlite behind one query() interface; auto-seeds
+src/queries.ts      one query module per context + Langfuse link builder
+src/server.ts       MCP tools + UI resource registration
+src/boat-tools.ts     boat.dev sandbox tools
+src/ui/widget.html  the MCP-UI dashboard (product, accounts, population, runs, session views)
+src/stdio.ts        stdio transport
+src/http.ts         Streamable HTTP transport + local preview
+scripts/smoke.ts    end-to-end test through an MCP client
 sql/schema.sql            tables for the four contexts + transcript pointer/parts
 sql/seed.sql              sample data (product "Tracelight", 8 accounts, segments, 260 sessions / 919 runs)
 docker-compose.yml        Postgres + Langfuse v4 (web, worker, ClickHouse, Redis, MinIO)

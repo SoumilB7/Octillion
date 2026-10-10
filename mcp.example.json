@@ -2,6 +2,7 @@
   "mcpServers": {
     "devtools": {
       "command": "npx",
+      "args": ["tsx", "--env-file-if-exists=/absolute/path/to/Octillion/.env", "/absolute/path/to/Octillion/src/stdio.ts"]
       "args": [
         "tsx",
         "--env-file-if-exists=/absolute/path/to/Octillion/.env",

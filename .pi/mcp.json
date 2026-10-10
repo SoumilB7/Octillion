@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "octillion": {
+      "command": "npm",
+      "args": ["start"],
+      "cwd": ".",
+      "description": "Octillion product analytics, trace history, and Boat sandbox operations",
+      "exposure": "codemode"
+    }
+  }
+}

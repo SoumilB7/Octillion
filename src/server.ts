@@ -7,6 +7,7 @@ import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@model
 import { createUIResource } from "@mcp-ui/server";
 import { z } from "zod";
 import * as q from "./queries.js";
+import { registerBoatTools } from "./boat-tools.js";
 
 export const WIDGET_URI = "ui://devtools/dashboard.html";
 export const WIDGET_HTML = readFileSync(
@@ -150,6 +151,7 @@ export function createServer(): McpServer {
     _meta: ui,
   }, (a) => runTool("get_agent_session", a));
 
+  registerBoatTools(server);
   registerAppTool(server, "get_session_transcript", {
     title: "Agent session transcript",
     description: "Read an agent session's JSONL transcript (user/assistant messages, tool calls and results, run boundaries) from object storage, a page at a time. Works for sealed and still-streaming sessions.",
