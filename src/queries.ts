@@ -1,6 +1,7 @@
 import { getDb } from "./db.js";
 import { getTraceObservations, langfuseLinks as langfuse } from "./langfuse.js";
 import { readTranscript } from "./transcripts.js";
+import { searchIndexStats, searchTranscripts as chSearch, type SearchParams } from "./search.js";
 
 // ---------- 1. DevTools product description ----------
 
@@ -238,4 +239,36 @@ export async function getRunTrace(runId: string) {
 
 export async function getSessionTranscript(sessionId: string, offset?: number, limit?: number) {
   return readTranscript(await getDb(), sessionId, offset, limit);
+}
+
+// ---------- Full-text search over session transcripts (ClickHouse) ----------
+
+export interface TranscriptSearchInput extends Omit<SearchParams, "accountId" | "query"> {
+  query?: string;
+  email?: string;
+}
+
+export async function searchSessionTranscripts(input: TranscriptSearchInput) {
+  const db = await getDb();
+  const accounts = await db.query<{ id: number; email: string }>("SELECT id, email FROM user_accounts");
+  const emailById = new Map(accounts.map((a) => [a.id, a.email]));
+  let accountId: number | undefined;
+  if (input.email) {
+    accountId = accounts.find((a) => a.email.toLowerCase() === input.email!.toLowerCase())?.id;
+    if (accountId === undefined) throw new Error(`No account found for ${input.email}`);
+  }
+  const { email, query = "", ...rest } = input;
+  const filters = { ...rest, email, mode: input.mode ?? "all" };
+
+  // No query: describe the index and the bucket's partition folders instead.
+  if (!query.trim()) return { view: "search" as const, query: "", filters, index: await searchIndexStats(), results: null };
+
+  const r = await chSearch({ ...rest, query, accountId });
+  return {
+    view: "search" as const,
+    query,
+    filters,
+    index: null,
+    results: { ...r, hits: r.hits.map((h) => ({ ...h, email: emailById.get(h.account_id) ?? null })) },
+  };
 }

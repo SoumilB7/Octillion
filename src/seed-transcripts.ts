@@ -1,5 +1,6 @@
 import type { Db } from "./db.js";
 import { getStore } from "./storage.js";
+import { reindexTranscripts, searchEnabled } from "./search.js";
 import { appendTranscript, sealTranscript, type NewTranscriptEvent } from "./transcripts.js";
 
 // Sample conversations per agent: [user prompt, tool name, tool input, tool output, assistant reply]
@@ -69,6 +70,7 @@ export function buildEvents(session: { id: string; agent_name: string; end_user_
 export async function seedTranscripts(db: Db): Promise<void> {
   const store = await getStore();
   await store.deletePrefix("sessions/");
+  await store.deletePrefix("parts/");
 
   const sessions = await db.query<{ id: string; agent_name: string; status: string; end_user_id: string | null; started_at: Date; ended_at: Date | null }>(
     "SELECT id, agent_name, status, end_user_id, started_at, ended_at FROM agent_sessions ORDER BY id",
@@ -87,10 +89,15 @@ export async function seedTranscripts(db: Db): Promise<void> {
       for (const [i, turn] of turns.entries()) await appendTranscript(db, s.id, i === 0 ? [start, ...turn] : turn);
       if (s.status !== "active") {
         await appendTranscript(db, s.id, [{ ts: new Date(s.ended_at ?? Date.now()).toISOString(), type: "session_end", status: s.status }]);
-        await sealTranscript(db, s.id);
+        await sealTranscript(db, s.id, { index: false }); // indexed in one pass below
       }
     }
   };
   // PGlite is single-connection, so parallelism mostly helps the object store round-trips.
   await Promise.all(Array.from({ length: db.kind === "pglite" ? 4 : 8 }, worker));
+
+  if (searchEnabled()) {
+    const r = await reindexTranscripts(db);
+    console.error(`search: indexed ${r.events} events from ${r.sessions} sealed transcripts (${r.files} files under ${r.prefix}) in ${r.ms}ms`);
+  }
 }

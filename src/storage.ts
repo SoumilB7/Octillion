@@ -1,4 +1,4 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -13,6 +13,8 @@ export interface ObjectStore {
   get(key: string): Promise<Buffer>;
   delete(keys: string[]): Promise<void>;
   deletePrefix(prefix: string): Promise<void>;
+  /** All objects whose key starts with prefix (recursively). */
+  list(prefix: string): Promise<{ key: string; size: number }[]>;
   /** Short-lived download URL, or null when the backend can't produce one. */
   signedUrl(key: string, expiresInSeconds?: number): Promise<string | null>;
 }
@@ -48,12 +50,17 @@ async function createS3Store(bucket: string): Promise<ObjectStore> {
       }
     },
     async deletePrefix(prefix) {
+      await store.delete((await store.list(prefix)).map((o) => o.key));
+    },
+    async list(prefix) {
+      const out: { key: string; size: number }[] = [];
       let token: string | undefined;
       do {
         const page = await client.send(new s3.ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token }));
-        await store.delete((page.Contents ?? []).map((o) => o.Key!).filter(Boolean));
+        for (const o of page.Contents ?? []) if (o.Key) out.push({ key: o.Key, size: o.Size ?? 0 });
         token = page.NextContinuationToken;
       } while (token);
+      return out;
     },
     signedUrl(key, expiresIn = 900) {
       return getSignedUrl(client, new s3.GetObjectCommand({ Bucket: bucket, Key: key }), { expiresIn });
@@ -65,7 +72,7 @@ async function createS3Store(bucket: string): Promise<ObjectStore> {
 function createFsStore(root: string): ObjectStore {
   const resolve = (key: string) => {
     const full = path.resolve(root, key);
-    if (!full.startsWith(path.resolve(root) + path.sep)) throw new Error(`Invalid object key: ${key}`);
+    if (full !== path.resolve(root) && !full.startsWith(path.resolve(root) + path.sep)) throw new Error(`Invalid object key: ${key}`);
     return full;
   };
   return {
@@ -81,6 +88,19 @@ function createFsStore(root: string): ObjectStore {
     },
     async deletePrefix(prefix) {
       await rm(resolve(prefix), { recursive: true, force: true });
+    },
+    async list(prefix) {
+      // Walk from the deepest directory the prefix names, then filter by the full prefix.
+      const dir = prefix.endsWith("/") ? prefix : path.posix.dirname(prefix) + "/";
+      const files = await readdir(resolve(dir === "./" ? "" : dir), { recursive: true }).catch(() => [] as string[]);
+      const out: { key: string; size: number }[] = [];
+      for (const rel of files) {
+        const key = path.posix.join(dir === "./" ? "" : dir, rel.split(path.sep).join("/"));
+        if (!key.startsWith(prefix)) continue;
+        const st = await stat(resolve(key));
+        if (st.isFile()) out.push({ key, size: st.size });
+      }
+      return out;
     },
     signedUrl: async () => null,
   };

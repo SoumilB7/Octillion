@@ -5,8 +5,9 @@
 #   devtools app DB  postgres://postgres:postgres@localhost:5432/devtools
 #   Langfuse UI      http://localhost:3000   (admin@devtools.local / devtools-admin)
 #   MinIO (S3)       http://localhost:9090   buckets: langfuse, transcripts
+#   ClickHouse HTTP  http://localhost:8123   user devtools/devtools, database devtools (local transcript search)
 #
-# Redis, ClickHouse and the Langfuse worker are only reachable inside the compose network.
+# Redis, ClickHouse's native port and the Langfuse worker are only reachable inside the compose network.
 #
 # Values are written literally (no ${VAR} interpolation) so this project's .env,
 # which also defines DATABASE_URL, can't leak into the Langfuse containers.
@@ -111,7 +112,10 @@ services:
       CLICKHOUSE_DB: default
       CLICKHOUSE_USER: clickhouse
       CLICKHOUSE_PASSWORD: clickhouse
+    ports:
+      - 127.0.0.1:8123:8123   # HTTP, for this app's transcript search (user 'devtools')
     volumes:
+      - ./docker/clickhouse/users.d-devtools.xml:/etc/clickhouse-server/users.d/devtools.xml:ro
       - clickhouse_data:/var/lib/clickhouse
       - clickhouse_logs:/var/log/clickhouse-server
     healthcheck:

@@ -3,3 +3,4 @@ dist/
 .pglite/
 .env
 .transcripts/
+clickhouse_credentials.txt
