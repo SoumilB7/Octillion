@@ -1,0 +1,31 @@
+{
+  "name": "devtools-mcp",
+  "version": "1.0.0",
+  "main": "dist/stdio.js",
+  "scripts": {
+    "start": "tsx --env-file-if-exists=.env src/stdio.ts",
+    "start:http": "tsx --env-file-if-exists=.env src/http.ts",
+    "db:up": "docker compose up -d --wait",
+    "db:reset": "tsx --env-file-if-exists=.env scripts/reset-db.ts",
+    "smoke": "tsx --env-file-if-exists=.env scripts/smoke.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "description": "Postgres-backed MCP server with MCP-UI views for product, accounts, developer population and trace runs",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@mcp-ui/server": "^6.1.0",
+    "@modelcontextprotocol/ext-apps": "^0.3.1",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "express": "^5.3.0",
+    "pg": "^8.23.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "type": "module"
+}

@@ -1,0 +1,577 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DevTools Dashboard</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --surface-2: #f0efec;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    --accent: #2a78d6;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4;
+    --good: #0ca30c; --warning: #fab219; --critical: #d03b3b;
+    --good-ink: #006300; --critical-ink: #b42f2f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19; --surface-2: #262624;
+      --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, 0.10);
+      --accent: #3987e5;
+      --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+      --good-ink: #0ca30c; --critical-ink: #e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #262624;
+    --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, 0.10);
+    --accent: #3987e5;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181;
+    --good-ink: #0ca30c; --critical-ink: #e66767;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--page); color: var(--ink);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 16px;
+  }
+  h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 13px; font-weight: 600; margin: 0 0 10px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.04em; }
+  p { margin: 0; }
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .muted { color: var(--muted); }
+  a { color: var(--accent); }
+  .sub { color: var(--ink-2); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  .stack > * + * { margin-top: 14px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .spread { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+  .grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .grid-wide { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+
+  .nav { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+  .nav button, .btn {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px 12px; font-size: 13px;
+  }
+  .nav button[aria-current="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+  .nav button:hover, .btn:hover { border-color: var(--axis); }
+  .nav .back { margin-right: auto; }
+
+  .badge { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--ink-2); white-space: nowrap; }
+  .status { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; white-space: nowrap; }
+  .status .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .status.ok .dot { background: var(--good); }
+  .status.error .dot { background: var(--critical); }
+  .status.timeout .dot { background: var(--warning); }
+  .status.completed .dot { background: var(--good); }
+  .status.failed .dot { background: var(--critical); }
+  .status.active .dot { background: var(--accent); }
+  .lf { font-size: 12px; white-space: nowrap; }
+
+  .tile .label { font-size: 12px; color: var(--ink-2); }
+  .tile .value { font-size: 24px; font-weight: 600; margin-top: 2px; letter-spacing: -0.01em; }
+  .tile .note { font-size: 12px; color: var(--muted); }
+
+  .meter { height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+  .meter > span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+  td { padding: 7px 8px; border-bottom: 1px solid var(--grid); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover td { background: var(--surface-2); }
+  .table-wrap { overflow-x: auto; }
+
+  .feature h3 { font-size: 14px; margin: 0 0 4px; }
+  .feature p { font-size: 13px; color: var(--ink-2); }
+  .tier .price { font-size: 22px; font-weight: 600; }
+  .tier ul { margin: 8px 0 0; padding-left: 18px; color: var(--ink-2); font-size: 13px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+  /* Horizontal bars (population) */
+  .hbars { display: grid; grid-template-columns: minmax(90px, 160px) 1fr auto; gap: 6px 10px; align-items: center; }
+  .hbars .track { position: relative; height: 18px; }
+  .hbars .bar { position: absolute; left: 0; top: 2px; bottom: 2px; background: var(--s1); border-radius: 0 4px 4px 0; }
+  .hbars .val { font-variant-numeric: tabular-nums; font-size: 13px; text-align: right; }
+  .hbars .hit { cursor: default; }
+
+  /* Session timeline */
+  .wf { display: grid; grid-template-columns: minmax(90px, 140px) 1fr 64px; gap: 4px 10px; align-items: center; font-size: 13px; }
+  .wf .name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wf .lane { position: relative; height: 16px; background: linear-gradient(to right, var(--grid) 1px, transparent 1px) 0 0 / 25% 100%; }
+  .wf .span { position: absolute; top: 3px; bottom: 3px; border-radius: 4px; min-width: 3px; }
+  .legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+
+  .err-box { border-left: 3px solid var(--critical); background: var(--surface-2); padding: 8px 12px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  select { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
+
+  #tip {
+    position: fixed; pointer-events: none; z-index: 10; display: none;
+    background: var(--ink); color: var(--surface); font-size: 12px; padding: 6px 8px; border-radius: 6px;
+    max-width: 260px; white-space: pre-line;
+  }
+  .loading { opacity: 0.55; transition: opacity 0.15s; }
+  .empty { padding: 40px 0; text-align: center; color: var(--muted); }
+  svg text { fill: var(--muted); font-size: 11px; }
+</style>
+</head>
+<body>
+<div id="app"><div class="empty">Waiting for data…</div></div>
+<div id="tip"></div>
+<script>
+(() => {
+  const app = document.getElementById("app");
+  const tip = document.getElementById("tip");
+  const history = [];
+  const PREVIEW = window.__DEVTOOLS_PREVIEW__; // set by the local preview server only
+  let msgSeq = 0;
+  const pending = new Map();
+
+  // ---------- helpers ----------
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const nf = new Intl.NumberFormat();
+  const num = (n) => nf.format(Math.round(Number(n) || 0));
+  const compact = (n) => new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(Number(n) || 0);
+  const pct = (n) => `${(Number(n) * 100).toFixed(1)}%`;
+  const usd = (n) => `$${Number(n || 0).toFixed(Number(n) < 1 ? 4 : 2)}`;
+  const ms = (n) => {
+    if (n >= 3600000) return `${Math.floor(n / 3600000)}h ${Math.round((n % 3600000) / 60000)}m`;
+    if (n >= 60000) return `${Math.floor(n / 60000)}m ${Math.round((n % 60000) / 1000)}s`;
+    return n >= 1000 ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}s` : `${Math.round(n)}ms`;
+  };
+  const plural = (n, word) => `${num(n)} ${word}${Number(n) === 1 ? "" : "s"}`;
+  const ago = (t) => {
+    const s = (Date.now() - new Date(t).getTime()) / 1000;
+    if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m ago`;
+    if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+    return `${Math.round(s / 86400)}d ago`;
+  };
+  const statusPill = (s) => {
+    const label = { ok: "✓ ok", error: "✕ error", timeout: "◷ timeout", completed: "✓ completed", failed: "✕ failed", active: "● active" }[s] || s;
+    return `<span class="status ${esc(s)}"><span class="dot"></span>${esc(label)}</span>`;
+  };
+  const tile = (label, value, note = "") =>
+    `<div class="card tile"><div class="label">${esc(label)}</div><div class="value">${value}</div>${note ? `<div class="note">${note}</div>` : ""}</div>`;
+
+  // ---------- host bridge (MCP-UI protocol; the MCP Apps adapter translates it) ----------
+  function post(msg) { window.parent?.postMessage(msg, "*"); }
+
+  async function callTool(toolName, params = {}, { replace = false } = {}) {
+    app.classList.add("loading");
+    try {
+      let result;
+      if (PREVIEW) {
+        const res = await fetch(PREVIEW.toolEndpoint, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: toolName, arguments: params }),
+        });
+        result = await res.json();
+      } else {
+        const messageId = `m${++msgSeq}`;
+        result = await new Promise((resolve, reject) => {
+          pending.set(messageId, { resolve, reject });
+          post({ type: "tool", messageId, payload: { toolName, params } });
+          setTimeout(() => pending.has(messageId) && (pending.delete(messageId), reject(new Error("Timed out"))), 30000);
+        });
+      }
+      const data = result?.structuredContent;
+      if (result?.isError || !data) throw new Error(result?.content?.[0]?.text || "Tool returned no data");
+      if (replace) history.pop();
+      show(data, true);
+    } catch (e) {
+      flash(String(e.message || e));
+    } finally {
+      app.classList.remove("loading");
+    }
+  }
+
+  function flash(text) {
+    const el = document.createElement("div");
+    el.className = "card err-box";
+    el.style.marginBottom = "12px";
+    el.textContent = text;
+    app.prepend(el);
+  }
+
+  window.addEventListener("message", (ev) => {
+    const msg = ev.data;
+    if (!msg || typeof msg !== "object") return;
+    if (msg.type === "ui-lifecycle-iframe-render-data") {
+      const rd = msg.payload?.renderData || {};
+      if (rd.theme === "dark" || rd.theme === "light") document.documentElement.dataset.theme = rd.theme;
+      const out = rd.toolOutput;
+      const data = out?.structuredContent ?? (out && out.view ? out : null);
+      if (data) { history.length = 0; show(data, true); }
+    } else if (msg.type === "ui-message-response") {
+      const p = pending.get(msg.payload?.messageId);
+      if (!p) return;
+      pending.delete(msg.payload.messageId);
+      msg.payload.error ? p.reject(new Error(JSON.stringify(msg.payload.error))) : p.resolve(msg.payload.response);
+    }
+  });
+
+  new ResizeObserver(() => post({ type: "ui-size-change", payload: { height: document.documentElement.scrollHeight } }))
+    .observe(document.body);
+
+  // ---------- tooltips ----------
+  document.addEventListener("pointermove", (e) => {
+    const t = e.target.closest?.("[data-tip]");
+    if (!t) { tip.style.display = "none"; return; }
+    tip.textContent = t.dataset.tip;
+    tip.style.display = "block";
+    const x = Math.min(e.clientX + 12, window.innerWidth - tip.offsetWidth - 8);
+    const y = e.clientY + 14 + tip.offsetHeight > window.innerHeight ? e.clientY - tip.offsetHeight - 10 : e.clientY + 14;
+    tip.style.left = `${x}px`; tip.style.top = `${y}px`;
+  });
+  document.addEventListener("pointerleave", () => (tip.style.display = "none"));
+
+  // ---------- click actions ----------
+  function openLink(url) {
+    if (PREVIEW) window.open(url, "_blank", "noopener");
+    else post({ type: "link", payload: { url } });
+  }
+  const lfLink = (url) => (url ? `<a href="#" class="lf" data-link="${esc(url)}">Langfuse ↗</a>` : "");
+
+  app.addEventListener("click", (e) => {
+    const link = e.target.closest("[data-link]");
+    if (link) { e.preventDefault(); e.stopPropagation(); openLink(link.dataset.link); return; }
+    const el = e.target.closest("[data-tool]");
+    if (el) { e.preventDefault(); callTool(el.dataset.tool, JSON.parse(el.dataset.args || "{}")); return; }
+    const back = e.target.closest("[data-back]");
+    if (back && history.length > 1) { history.pop(); render(history[history.length - 1]); }
+  });
+  app.addEventListener("change", (e) => {
+    const f = e.target.closest("[data-filter]");
+    if (!f) return;
+    const current = history[history.length - 1];
+    const filters = { ...current.filters, [f.dataset.filter]: f.value || undefined };
+    if (f.dataset.filter === "days") filters.days = Number(f.value);
+    callTool("list_trace_runs", filters, { replace: true });
+  });
+
+  const args = (o) => esc(JSON.stringify(o));
+
+  function nav(view) {
+    const items = [
+      ["product", "Product", "get_product_overview", {}],
+      ["account", "Accounts", "get_user_account", {}],
+      ["population", "Developers", "get_developer_population", {}],
+      ["traces", "Trace runs", "list_trace_runs", {}],
+    ];
+    const group = { accounts: "account", session: "traces" }[view] || view;
+    return `<nav class="nav">
+      ${history.length > 1 ? `<button class="back" data-back>← Back</button>` : ""}
+      ${items.map(([v, label, tool, a]) => `<button data-tool="${tool}" data-args="${args(a)}" aria-current="${v === group}">${label}</button>`).join("")}
+    </nav>`;
+  }
+
+  function show(data, push) {
+    if (push) history.push(data);
+    render(data);
+  }
+
+  function render(d) {
+    tip.style.display = "none";
+    const views = { product: viewProduct, accounts: viewAccounts, account: viewAccount, population: viewPopulation, traces: viewTraces, session: viewSession };
+    const fn = views[d.view];
+    app.innerHTML = nav(d.view) + (fn ? fn(d) : `<div class="empty">Unknown view: ${esc(d.view)}</div>`);
+  }
+
+  // ---------- 1. Product ----------
+  function viewProduct({ product: p, stats }) {
+    const tiers = (p.pricing_tiers || []).map((t) => `
+      <div class="card tier">
+        <div class="spread"><strong style="text-transform:capitalize">${esc(t.plan)}</strong><span class="badge">${t.seats ? plural(t.seats, "seat") : "Custom seats"}</span></div>
+        <div class="price">${t.price_usd_month == null ? "Contact us" : t.price_usd_month === 0 ? "Free" : `$${t.price_usd_month}<span class="muted" style="font-size:13px;font-weight:400">/mo</span>`}</div>
+        <div class="muted" style="font-size:12px">${t.trace_quota ? `${compact(t.trace_quota)} traces / month` : "Unlimited traces"}</div>
+        <ul>${(t.highlights || []).map((h) => `<li>${esc(h)}</li>`).join("")}</ul>
+      </div>`).join("");
+    return `<div class="stack">
+      <div class="card stack">
+        <div class="spread">
+          <div><h1>${esc(p.name)}</h1><p class="sub">${esc(p.tagline)}</p></div>
+          <div class="row"><span class="badge">v${esc(p.version)}</span><span class="badge">${esc(p.category)}</span></div>
+        </div>
+        <p>${esc(p.description)}</p>
+        ${p.docs_url ? `<p class="muted" style="font-size:12px">Docs: ${esc(p.docs_url)} · Released ${esc(String(p.released_at).slice(0, 10))}</p>` : ""}
+      </div>
+      <div class="grid">
+        ${tile("Developers", compact(stats.developers), `<a href="#" data-tool="get_developer_population" data-args="{}">See breakdown →</a>`)}
+        ${tile("Accounts", num(stats.accounts), `<a href="#" data-tool="get_user_account" data-args="{}">View accounts →</a>`)}
+        ${tile("Trace runs · 30d", num(stats.runs_30d), `<a href="#" data-tool="list_trace_runs" data-args="${args({ days: 30 })}">Open history →</a>`)}
+      </div>
+      <div><h2>Features</h2><div class="grid-wide">
+        ${(p.features || []).map((f) => `<div class="card feature"><h3>${esc(f.name)}</h3><p>${esc(f.description)}</p></div>`).join("")}
+      </div></div>
+      <div><h2>Pricing</h2><div class="grid">${tiers}</div></div>
+      <div><h2>Integrations</h2><div class="chips">${(p.integrations || []).map((i) => `<span class="badge">${esc(i)}</span>`).join("")}</div></div>
+    </div>`;
+  }
+
+  // ---------- 2. Accounts ----------
+  function viewAccounts({ accounts }) {
+    return `<div class="card">
+      <h2>User accounts</h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Org</th><th>Plan</th><th>Status</th><th class="num">Runs · 30d</th><th>Last active</th></tr></thead>
+        <tbody>${accounts.map((a) => `
+          <tr class="clickable" data-tool="get_user_account" data-args="${args({ email: a.email })}">
+            <td><strong>${esc(a.full_name)}</strong><div class="muted" style="font-size:12px">${esc(a.email)}</div></td>
+            <td>${esc(a.org_name)}</td>
+            <td><span class="badge" style="text-transform:capitalize">${esc(a.plan)}</span></td>
+            <td>${esc(a.status)}</td>
+            <td class="num">${num(a.runs_30d)}</td>
+            <td class="muted">${ago(a.last_active_at)}</td>
+          </tr>`).join("")}</tbody>
+      </table></div>
+    </div>`;
+  }
+
+  function viewAccount({ account: a, usage: u, workflows, recentSessions }) {
+    const used = Number(u.runs_this_month);
+    const share = a.monthly_trace_quota ? Math.min(1, used / a.monthly_trace_quota) : 0;
+    const failRate = u.runs_30d ? u.failed_30d / u.runs_30d : 0;
+    return `<div class="stack">
+      <div class="card stack">
+        <div class="spread">
+          <div><h1>${esc(a.full_name)}</h1><p class="sub">${esc(a.role)} · ${esc(a.org_name)}</p><p class="muted" style="font-size:12px">${esc(a.email)}</p></div>
+          <div class="row">
+            <span class="badge" style="text-transform:capitalize">${esc(a.plan)} plan</span>
+            <span class="badge">${esc(a.status)}</span>
+            <span class="badge">${plural(a.seats, "seat")}</span>
+          </div>
+        </div>
+        <div>
+          <div class="spread" style="font-size:12px"><span class="sub">Monthly trace quota</span><span class="muted">${num(used)} / ${compact(a.monthly_trace_quota)} (${share > 0 && share < 0.001 ? "<0.1%" : pct(share)})</span></div>
+          <div class="meter" data-tip="${esc(`${num(used)} of ${num(a.monthly_trace_quota)} traces used this month`)}"><span style="width:${Math.max(share * 100, 0.5)}%"></span></div>
+        </div>
+        <p class="muted" style="font-size:12px">${esc(a.primary_language)} · ${esc(a.region)} · customer since ${esc(String(a.created_at).slice(0, 10))} · active ${ago(a.last_active_at)}</p>
+      </div>
+      <div class="grid">
+        ${tile("Runs · 30d", num(u.runs_30d))}
+        ${tile("Failure rate · 30d", pct(failRate), `${num(u.failed_30d)} failed`)}
+        ${tile("Spend · 30d", usd(u.cost_30d))}
+        ${tile("Tokens · 30d", compact(u.tokens_30d))}
+      </div>
+      <div class="grid-wide">
+        <div class="card"><h2>Workflows · 30d</h2>
+          ${workflows.length ? `<table><thead><tr><th>Workflow</th><th class="num">Runs</th><th class="num">Failed</th></tr></thead><tbody>
+            ${workflows.map((w) => `<tr class="clickable" data-tool="list_trace_runs" data-args="${args({ email: a.email, workflow: w.name, days: 30 })}"><td>${esc(w.name)}</td><td class="num">${num(w.runs)}</td><td class="num">${num(w.failed)}</td></tr>`).join("")}
+          </tbody></table>` : `<div class="empty">No runs in the last 30 days</div>`}
+        </div>
+        <div class="card"><div class="spread"><h2>Recent agent sessions</h2><button class="btn" data-tool="list_trace_runs" data-args="${args({ email: a.email, days: 30 })}">All runs →</button></div>
+          ${recentSessions.length ? `<table><tbody>
+            ${recentSessions.map((r) => `<tr class="clickable" data-tool="get_agent_session" data-args="${args({ session_id: r.id })}"><td>${statusPill(r.status)}</td><td>${esc(r.agent_name)}<div class="muted" style="font-size:12px">${esc(r.id)} · ${esc(r.environment)} · ${ago(r.started_at)}</div></td><td class="num">${plural(r.runs, "run")}</td></tr>`).join("")}
+          </tbody></table>` : `<div class="empty">No sessions yet</div>`}
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ---------- 3. Developer population ----------
+  const DIM_LABELS = { role: "Role", language: "Language", region: "Region", experience: "Experience", company_size: "Company size" };
+  let selectedDim = null;
+
+  function viewPopulation(d) {
+    const dims = Object.keys(d.breakdown);
+    if (!selectedDim || !dims.includes(selectedDim)) selectedDim = d.selected && dims.includes(d.selected) ? d.selected : dims.includes("role") ? "role" : dims[0];
+    const rows = d.breakdown[selectedDim] || [];
+    const max = Math.max(...rows.map((r) => r.developers), 1);
+    const bars = rows.map((r) => {
+      const t = `${r.segment}\n${num(r.developers)} developers (${pct(r.share)})\n${num(r.active30d)} active in last 30d (${pct(r.active30d / r.developers)})`;
+      return `<div class="sub hit" data-tip="${esc(t)}">${esc(r.segment)}</div>
+        <div class="track hit" data-tip="${esc(t)}"><div class="bar" style="width:${(r.developers / max) * 100}%"></div></div>
+        <div class="val">${compact(r.developers)} <span class="muted">· ${pct(r.share)}</span></div>`;
+    }).join("");
+    return `<div class="stack">
+      <div class="grid">
+        ${tile("Total developers", num(d.totalDevelopers), d.asOf ? `as of ${esc(d.asOf)}` : "")}
+        ${tile("Active · 30d", num(d.active30d), pct(d.active30d / (d.totalDevelopers || 1)) + " of total")}
+      </div>
+      <div class="card stack">
+        <div class="spread">
+          <h2 style="margin:0">Developers by ${esc((DIM_LABELS[selectedDim] || selectedDim).toLowerCase())}</h2>
+          <div class="nav" style="margin:0">${dims.map((k) => `<button data-dim="${esc(k)}" aria-current="${k === selectedDim}">${esc(DIM_LABELS[k] || k)}</button>`).join("")}</div>
+        </div>
+        <div class="hbars">${bars}</div>
+      </div>
+      <div class="card"><h2>Table</h2><div class="table-wrap"><table>
+        <thead><tr><th>${esc(DIM_LABELS[selectedDim] || selectedDim)}</th><th class="num">Developers</th><th class="num">Share</th><th class="num">Active · 30d</th><th class="num">Active rate</th></tr></thead>
+        <tbody>${rows.map((r) => `<tr><td>${esc(r.segment)}</td><td class="num">${num(r.developers)}</td><td class="num">${pct(r.share)}</td><td class="num">${num(r.active30d)}</td><td class="num">${pct(r.active30d / r.developers)}</td></tr>`).join("")}</tbody>
+      </table></div></div>
+    </div>`;
+  }
+  app.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-dim]");
+    if (!b) return;
+    selectedDim = b.dataset.dim;
+    render(history[history.length - 1]);
+  });
+
+  // ---------- 4. Trace runs history ----------
+  const STATUS_SERIES = [["ok", "var(--good)", "✓ ok"], ["error", "var(--critical)", "✕ error"], ["timeout", "var(--warning)", "◷ timeout"]];
+
+  function dailyChart(daily) {
+    const W = 640, H = 150, padL = 32, padB = 20, padT = 8;
+    const max = Math.max(...daily.map((d) => d.ok + d.error + d.timeout), 1);
+    // Round the axis max up to a 1/2/5 step so ticks land on integers.
+    const raw = max / 2, mag = 10 ** Math.floor(Math.log10(raw));
+    const step = Math.max(1, [1, 2, 5, 10].map((m) => m * mag).find((v) => v >= raw));
+    const nice = step * 2;
+    const bw = (W - padL) / daily.length;
+    const barW = Math.max(3, Math.min(28, bw - 4));
+    const y = (v) => ((H - padB - padT) * v) / nice;
+    const ticks = [0, nice / 2, nice];
+    let out = ticks.map((t) => {
+      const ty = H - padB - y(t);
+      return `<line x1="${padL}" x2="${W}" y1="${ty}" y2="${ty}" stroke="var(--grid)" />
+              <text x="${padL - 6}" y="${ty + 4}" text-anchor="end">${t}</text>`;
+    }).join("");
+    const labelEvery = Math.ceil(daily.length / 7);
+    daily.forEach((d, i) => {
+      const x = padL + i * bw + (bw - barW) / 2;
+      let base = H - padB;
+      const parts = STATUS_SERIES.filter(([k]) => d[k] > 0);
+      parts.forEach(([k, color], j) => {
+        const h = y(d[k]);
+        const top = j === parts.length - 1;
+        // 2px surface gap between stacked segments; rounded only at the data end.
+        const gap = j > 0 ? 2 : 0;
+        const hh = Math.max(h - gap, 1);
+        const r = Math.min(4, hh, barW / 2);
+        out += top
+          ? `<path d="M${x},${base - gap} v${-(hh - r)} q0,${-r} ${r},${-r} h${barW - 2 * r} q${r},0 ${r},${r} v${hh - r} z" fill="${color}" />`
+          : `<rect x="${x}" y="${base - gap - hh}" width="${barW}" height="${hh}" fill="${color}" />`;
+        base -= h;
+      });
+      const total = d.ok + d.error + d.timeout;
+      const date = new Date(d.day + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      const t = `${date}\n${total} runs\n✓ ok ${d.ok} · ✕ error ${d.error} · ◷ timeout ${d.timeout}`;
+      out += `<rect x="${padL + i * bw}" y="${padT}" width="${bw}" height="${H - padB - padT}" fill="transparent" data-tip="${esc(t)}" />`;
+      if (i % labelEvery === 0) out += `<text x="${x + barW / 2}" y="${H - 5}" text-anchor="middle">${esc(date)}</text>`;
+    });
+    out += `<line x1="${padL}" x2="${W}" y1="${H - padB}" y2="${H - padB}" stroke="var(--axis)" />`;
+    return `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Runs per day by status">${out}</svg>`;
+  }
+
+  function viewTraces({ filters: f, summary: s, daily, runs }) {
+    const errRate = s.runs ? (s.error + s.timeout) / s.runs : 0;
+    const opt = (name, values, current, allLabel) =>
+      `<select data-filter="${name}">${allLabel ? `<option value="">${allLabel}</option>` : ""}${values.map(([v, l]) => `<option value="${esc(v)}" ${String(current ?? "") === String(v) ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+    const scope = [f.email && `account ${f.email}`, f.workflow && `workflow ${f.workflow}`, f.session_id && `session ${f.session_id}`].filter(Boolean).join(" · ");
+    return `<div class="stack">
+      <div class="spread">
+        <div><h1>Trace runs</h1><p class="sub">${scope ? esc(scope) : "All accounts"}</p></div>
+        <div class="row">
+          ${opt("days", [[7, "Last 7 days"], [14, "Last 14 days"], [30, "Last 30 days"]], f.days)}
+          ${opt("status", [["ok", "✓ ok"], ["error", "✕ error"], ["timeout", "◷ timeout"]], f.status, "Any status")}
+          ${opt("environment", [["production", "production"], ["staging", "staging"], ["dev", "dev"]], f.environment, "Any env")}
+        </div>
+      </div>
+      <div class="grid">
+        ${tile("Runs", num(s.runs))}
+        ${tile("Failure rate", pct(errRate), `${num(s.error)} errors · ${num(s.timeout)} timeouts`)}
+        ${tile("Latency p50 / p95", `${ms(s.p50_ms)} <span class="muted" style="font-size:16px">/ ${ms(s.p95_ms)}</span>`)}
+        ${tile("Spend", usd(s.cost_usd), `${compact(s.tokens)} tokens`)}
+      </div>
+      <div class="card">
+        <div class="spread"><h2>Runs per day</h2>
+          <div class="legend">${STATUS_SERIES.map(([, c, l]) => `<span><i style="background:${c}"></i>${l}</span>`).join("")}</div>
+        </div>
+        ${dailyChart(daily)}
+      </div>
+      <div class="card"><h2>Latest ${runs.length} runs</h2>
+        ${runs.length ? `<div class="table-wrap"><table>
+          <thead><tr><th>Status</th><th>Run</th><th>Account</th><th>Env</th><th class="num">Duration</th><th class="num">Tokens</th><th class="num">Cost</th><th>Started</th><th></th></tr></thead>
+          <tbody>${runs.map((r) => `
+            <tr class="clickable" data-tool="get_agent_session" data-args="${args({ session_id: r.session_id })}" ${r.error_message ? `data-tip="${esc(r.error_message)}"` : ""}>
+              <td>${statusPill(r.status)}</td>
+              <td><strong>${esc(r.name)}</strong><div class="muted" style="font-size:12px">${esc(r.id)} · ${esc(r.session_id)}</div></td>
+              <td class="sub">${esc(r.email)}</td>
+              <td>${esc(r.environment)}</td>
+              <td class="num">${ms(r.duration_ms)}</td>
+              <td class="num">${compact(r.tokens)}</td>
+              <td class="num">${usd(r.cost_usd)}</td>
+              <td class="muted">${ago(r.started_at)}</td>
+              <td>${lfLink(r.langfuse_url)}</td>
+            </tr>`).join("")}</tbody>
+        </table></div>` : `<div class="empty">No runs match these filters</div>`}
+      </div>
+    </div>`;
+  }
+
+  // ---------- Agent session (timeline of runs; span detail lives in Langfuse) ----------
+  const RUN_COLORS = { ok: "var(--good)", error: "var(--critical)", timeout: "var(--warning)" };
+
+  function viewSession({ session: s, runs }) {
+    const t0 = runs.length ? new Date(runs[0].started_at).getTime() : 0;
+    const end = Math.max(...runs.map((r) => new Date(r.started_at).getTime() + r.duration_ms - t0), 1);
+    const lanes = runs.map((r, i) => {
+      const off = new Date(r.started_at).getTime() - t0;
+      const t = `Turn ${i + 1} · ${r.id}\n${{ ok: "✓ ok", error: "✕ error", timeout: "◷ timeout" }[r.status]} · starts +${ms(off)} · ${ms(r.duration_ms)}${r.error_message ? "\n" + r.error_message : ""}`;
+      return `<div class="name">${esc(r.id)}</div>
+        <div class="lane" data-tip="${esc(t)}"><div class="span" style="left:${(off / end) * 100}%;width:${Math.max((r.duration_ms / end) * 100, 0.6)}%;background:${RUN_COLORS[r.status]}"></div></div>
+        <div class="num muted" style="text-align:right;font-variant-numeric:tabular-nums">${ms(r.duration_ms)}</div>`;
+    }).join("");
+    const wall = s.ended_at ? new Date(s.ended_at) - new Date(s.started_at) : Date.now() - new Date(s.started_at);
+    const statuses = [...new Set(runs.map((r) => r.status))];
+    return `<div class="stack">
+      <div class="card stack">
+        <div class="spread">
+          <div><h1>${esc(s.agent_name)}</h1><p class="sub">${esc(s.id)} · ${esc(s.environment)} · <a href="#" data-tool="get_user_account" data-args="${args({ email: s.email })}">${esc(s.email)}</a>${s.end_user_id ? ` · end user ${esc(s.end_user_id)}` : ""}</p></div>
+          <div class="row">${statusPill(s.status)}<span class="badge">${new Date(s.started_at).toLocaleString()}</span>${lfLink(s.langfuse_url)}</div>
+        </div>
+      </div>
+      <div class="grid">
+        ${tile("Runs", num(s.runs), `${num(s.failed_runs)} failed`)}
+        ${tile(s.ended_at ? "Session length" : "Running for", ms(wall), `${ms(s.busy_ms)} in runs`)}
+        ${tile("Tokens", compact(s.tokens_in + s.tokens_out), `${compact(s.tokens_in)} in · ${compact(s.tokens_out)} out`)}
+        ${tile("Cost", usd(s.cost_usd))}
+      </div>
+      <div class="card stack">
+        <div class="spread"><h2 style="margin:0">Run timeline</h2>
+          <div class="legend">${statuses.map((k) => `<span><i style="background:${RUN_COLORS[k]}"></i>${{ ok: "✓ ok", error: "✕ error", timeout: "◷ timeout" }[k]}</span>`).join("")}</div>
+        </div>
+        <div class="wf">${lanes}</div>
+        <div class="muted" style="font-size:12px">Gridlines at 25% intervals of ${ms(end)}</div>
+      </div>
+      <div class="card"><h2>Runs</h2><div class="table-wrap"><table>
+        <thead><tr><th>Turn</th><th>Status</th><th>Run</th><th class="num">Duration</th><th class="num">Tokens</th><th class="num">Cost</th><th>Langfuse trace</th></tr></thead>
+        <tbody>${runs.map((r, i) => `<tr>
+          <td class="num">${i + 1}</td>
+          <td>${statusPill(r.status)}${r.error_message ? `<div class="muted" style="font-size:12px">${esc(r.error_message)}</div>` : ""}</td>
+          <td>${esc(r.id)}</td>
+          <td class="num">${ms(r.duration_ms)}</td>
+          <td class="num">${compact(r.tokens_in + r.tokens_out)}</td>
+          <td class="num">${usd(r.cost_usd)}</td>
+          <td>${r.langfuse_url ? lfLink(r.langfuse_url) : `<code class="muted" style="font-size:11px">${esc(r.langfuse_trace_id.slice(0, 12))}…</code>`}</td>
+        </tr>`).join("")}</tbody>
+      </table></div></div>
+    </div>`;
+  }
+
+  // ---------- boot ----------
+  if (PREVIEW?.data) show(PREVIEW.data, true);
+  post({ type: "ui-lifecycle-iframe-ready" });
+  post({ type: "ui-request-render-data", messageId: "render-data" });
+})();
+</script>
+</body>
+</html>
