@@ -4,7 +4,9 @@
 --   3. developer_segments  - developer population breakdown
 --   4. agent_sessions / trace_runs - trace runs history
 -- Span-level trace detail lives in Langfuse; rows here carry the Langfuse ids to link out.
+-- Session transcripts (JSONL) live in object storage; agent_sessions holds the pointer.
 
+DROP TABLE IF EXISTS session_transcript_parts;
 DROP TABLE IF EXISTS trace_spans;
 DROP TABLE IF EXISTS trace_runs;
 DROP TABLE IF EXISTS agent_sessions;
@@ -64,9 +66,33 @@ CREATE TABLE agent_sessions (
   end_user_id   TEXT,                           -- the account's own end user, if they pass one
   started_at    TIMESTAMPTZ NOT NULL,
   ended_at      TIMESTAMPTZ,                    -- NULL while active
-  metadata      JSONB NOT NULL DEFAULT '{}'
+  metadata      JSONB NOT NULL DEFAULT '{}',
+  -- Transcript pointer. The key is relative to the configured bucket (or .transcripts/ on disk),
+  -- e.g. sessions/acct_1/2026/10/ses_00091.jsonl.gz, so storage can move without rewriting rows.
+  transcript_status    TEXT NOT NULL DEFAULT 'none'
+                       CHECK (transcript_status IN ('none', 'streaming', 'sealed', 'expired')),
+  transcript_key       TEXT,                    -- set once sealed
+  transcript_lines     INT,
+  transcript_bytes     BIGINT,                  -- compressed size
+  transcript_sha256    TEXT,                    -- of the compressed object
+  transcript_sealed_at TIMESTAMPTZ,
+  CHECK ((transcript_status = 'sealed') = (transcript_key IS NOT NULL))
 );
 CREATE INDEX agent_sessions_account_started_idx ON agent_sessions (account_id, started_at DESC);
+
+-- Gzipped JSONL parts written while a session is streaming; compacted into one object and
+-- deleted when the session is sealed.
+CREATE TABLE session_transcript_parts (
+  session_id  TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+  part_no     INT  NOT NULL,
+  object_key  TEXT NOT NULL,
+  first_seq   INT  NOT NULL,
+  last_seq    INT  NOT NULL,
+  lines       INT  NOT NULL,
+  bytes       INT  NOT NULL,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (session_id, part_no)
+);
 
 CREATE TABLE trace_runs (
   id            TEXT PRIMARY KEY,               -- e.g. run_000123

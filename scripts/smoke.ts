@@ -45,6 +45,59 @@ assert.equal(session.session.runs, session.runs.length);
 const inSession = await call("list_trace_runs", { session_id: session.session.id, days: 31 });
 assert.equal(inSession.runs.length, session.runs.length);
 
+// Transcripts: sealed (compacted object) and streaming (live parts)
+assert.equal(session.session.transcript_status === "sealed" || session.session.transcript_status === "streaming", true);
+const sealed = await call("get_session_transcript", { session_id: "ses_00001", limit: 5 });
+assert.equal(sealed.status, "sealed");
+assert.equal(sealed.events.length, 5);
+assert.equal(sealed.events[0].type, "session_start");
+assert.ok(sealed.events.every((e: any, i: number) => e.seq === i + 1), "events ordered by seq");
+const page2 = await call("get_session_transcript", { session_id: "ses_00001", offset: 5, limit: 5 });
+assert.equal(page2.events[0].seq, 6);
+const live = await call("get_session_transcript", { session_id: "ses_00042" });
+assert.equal(live.status, "streaming");
+assert.ok(live.total > 0 && live.key === null);
+
+// Append -> seal round trip on a throwaway session, including a retried (duplicate seq) part
+{
+  const { getDb } = await import("../src/db.js");
+  const { getStore } = await import("../src/storage.js");
+  const { appendTranscript, sealTranscript } = await import("../src/transcripts.js");
+  const db = await getDb();
+  const id = `ses_smoke_${Date.now()}`;
+  await db.query(
+    "INSERT INTO agent_sessions (id, account_id, agent_name, environment, status, started_at) VALUES ($1, 1, 'smoke', 'dev', 'active', now())",
+    [id],
+  );
+  try {
+    const ts = new Date().toISOString();
+    await appendTranscript(db, id, [{ ts, type: "session_start" }, { ts, type: "user_message", content: "smoke ping" }]);
+    await appendTranscript(db, id, [{ seq: 2, ts, type: "user_message", content: "smoke ping" }]); // retried write
+    await appendTranscript(db, id, [{ ts, type: "session_end", status: "completed" }]);
+    const sealedNow = await sealTranscript(db, id);
+    const after = await call("get_session_transcript", { session_id: id, limit: 500 });
+    assert.equal(after.status, "sealed");
+    assert.deepEqual(after.events.map((e: any) => e.seq), [1, 2, 3], "duplicate seq dropped, order kept");
+    assert.equal(after.total, sealedNow.lines);
+    const [{ parts }] = await db.query<{ parts: number }>("SELECT count(*) AS parts FROM session_transcript_parts WHERE session_id = $1", [id]);
+    assert.equal(parts, 0, "parts removed after seal");
+    await assert.rejects(appendTranscript(db, id, [{ ts, type: "user_message" }]), /sealed/, "sealed transcripts are read-only");
+    await (await getStore()).delete([sealedNow.key]);
+  } finally {
+    await db.query("DELETE FROM agent_sessions WHERE id = $1", [id]);
+  }
+}
+
+// Langfuse: live span tree for a run (only when the Langfuse API is configured)
+if (process.env.LANGFUSE_PUBLIC_KEY) {
+  const trace = await call("get_run_trace", { run_id: session.runs[0].id });
+  assert.ok(trace.observations.length >= 3, "Langfuse returned spans");
+  assert.ok(trace.observations.some((o: any) => o.type === "GENERATION" && o.model), "generation has a model");
+  assert.equal(trace.observations.filter((o: any) => !o.parentObservationId).length, 1, "single root span");
+} else {
+  console.log("- get_run_trace skipped (LANGFUSE_PUBLIC_KEY not set)");
+}
+
 const missing = await client.callTool({ name: "get_agent_session", arguments: { session_id: "ses_nope" } });
 assert.ok(missing.isError, "unknown session returns isError");
 console.log("✓ unknown session_id -> isError");

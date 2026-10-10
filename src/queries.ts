@@ -1,12 +1,6 @@
 import { getDb } from "./db.js";
-
-// Span-level traces live in Langfuse. Links are only emitted when a project id is configured.
-const LANGFUSE_HOST = (process.env.LANGFUSE_HOST ?? "https://cloud.langfuse.com").replace(/\/$/, "");
-const LANGFUSE_PROJECT = process.env.LANGFUSE_PROJECT_ID;
-export const langfuse = {
-  trace: (traceId: string) => (LANGFUSE_PROJECT ? `${LANGFUSE_HOST}/project/${LANGFUSE_PROJECT}/traces/${traceId}` : null),
-  session: (sessionId: string) => (LANGFUSE_PROJECT ? `${LANGFUSE_HOST}/project/${LANGFUSE_PROJECT}/sessions/${sessionId}` : null),
-};
+import { getTraceObservations, langfuseLinks as langfuse } from "./langfuse.js";
+import { readTranscript } from "./transcripts.js";
 
 // ---------- 1. DevTools product description ----------
 
@@ -183,6 +177,8 @@ interface SessionRow {
   end_user_id: string | null; started_at: Date; ended_at: Date | null; metadata: Record<string, unknown>;
   email: string; org_name: string; runs: number; failed_runs: number;
   tokens_in: number; tokens_out: number; cost_usd: number; busy_ms: number;
+  transcript_status: string; transcript_key: string | null; transcript_lines: number | null;
+  transcript_bytes: number | null; transcript_sealed_at: Date | null;
 }
 interface SessionRunRow {
   id: string; langfuse_trace_id: string; status: string; started_at: Date; duration_ms: number;
@@ -217,4 +213,29 @@ export async function getAgentSession(sessionId: string) {
     session: { ...session, langfuse_url: langfuse.session(sessionId) },
     runs: runs.map((r) => ({ ...r, langfuse_url: langfuse.trace(r.langfuse_trace_id as string) })),
   };
+}
+
+export async function getRunTrace(runId: string) {
+  const db = await getDb();
+  const [run] = await db.query<{
+    id: string; session_id: string; langfuse_trace_id: string; name: string; environment: string;
+    status: string; started_at: Date; duration_ms: number; error_message: string | null;
+  }>(
+    `SELECT id, session_id, langfuse_trace_id, name, environment, status, started_at, duration_ms, error_message
+       FROM trace_runs WHERE id = $1`,
+    [runId],
+  );
+  if (!run) throw new Error(`No trace run ${runId}`);
+  const observations = await getTraceObservations(run.langfuse_trace_id);
+  const root = observations.find((o) => !o.parentObservationId);
+  return {
+    view: "trace" as const,
+    run: { ...run, langfuse_url: langfuse.trace(run.langfuse_trace_id) },
+    trace: { id: run.langfuse_trace_id, name: root?.name ?? run.name, timestamp: observations[0]?.startTime ?? run.started_at },
+    observations,
+  };
+}
+
+export async function getSessionTranscript(sessionId: string, offset?: number, limit?: number) {
+  return readTranscript(await getDb(), sessionId, offset, limit);
 }

@@ -7,9 +7,14 @@ import path from "node:path";
  *  - DATABASE_URL set  -> real Postgres via `pg` (e.g. the docker-compose service)
  *  - otherwise         -> embedded PGlite (Postgres compiled to WASM), persisted to PGLITE_DIR
  */
-export interface Db {
+export interface Queryable {
   query<T = Record<string, unknown>>(sql: string, params?: unknown[]): Promise<T[]>;
+}
+
+export interface Db extends Queryable {
   exec(sql: string): Promise<void>;
+  /** Run fn inside BEGIN/COMMIT; rolls back if it throws. */
+  transaction<T>(fn: (tx: Queryable) => Promise<T>): Promise<T>;
   close(): Promise<void>;
   kind: "postgres" | "pglite";
 }
@@ -32,6 +37,20 @@ async function createDb(): Promise<Db> {
       async exec(sql) {
         await pool.query(sql);
       },
+      async transaction(fn) {
+        const client = await pool.connect();
+        try {
+          await client.query("BEGIN");
+          const result = await fn({ query: async (sql, params) => (await client.query(sql, params)).rows });
+          await client.query("COMMIT");
+          return result;
+        } catch (err) {
+          await client.query("ROLLBACK");
+          throw err;
+        } finally {
+          client.release();
+        }
+      },
       close: () => pool.end(),
     };
   }
@@ -49,6 +68,8 @@ async function createDb(): Promise<Db> {
     async exec(sql) {
       await lite.exec(sql);
     },
+    transaction: (fn) =>
+      lite.transaction((tx) => fn({ query: async (sql, params) => (await tx.query(sql, params)).rows as never[] })),
     close: () => lite.close(),
   };
 }
@@ -68,8 +89,10 @@ export function getDb(): Promise<Db> {
   return dbPromise;
 }
 
-/** Drop and recreate all tables, then load the sample data. */
+/** Drop and recreate all tables, then load the sample data (including session transcripts). */
 export async function resetDb(db: Db): Promise<void> {
   await db.exec(await readFile(path.join(SQL_DIR, "schema.sql"), "utf8"));
   await db.exec(await readFile(path.join(SQL_DIR, "seed.sql"), "utf8"));
+  const { seedTranscripts } = await import("./seed-transcripts.js");
+  await seedTranscripts(db);
 }

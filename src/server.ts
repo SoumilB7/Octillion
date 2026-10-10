@@ -21,6 +21,9 @@ export const handlers = {
   get_developer_population: (a: { dimension?: q.Dimension }) => q.getPopulation(a.dimension),
   list_trace_runs: (a: q.TraceFilter) => q.listTraceRuns(a),
   get_agent_session: (a: { session_id: string }) => q.getAgentSession(a.session_id),
+  get_session_transcript: (a: { session_id: string; offset?: number; limit?: number }) =>
+    q.getSessionTranscript(a.session_id, a.offset, a.limit),
+  get_run_trace: (a: { run_id: string }) => q.getRunTrace(a.run_id),
 } as const;
 export type ToolName = keyof typeof handlers;
 
@@ -42,7 +45,13 @@ function summarize(data: Awaited<ReturnType<(typeof handlers)[ToolName]>>): stri
     case "session": {
       const s = data.session;
       const errors = data.runs.filter((r) => r.error_message).map((r) => `${r.id}: ${r.error_message}`);
-      return `Session ${s.id} (${s.agent_name}, ${s.environment}) ${s.status}: ${s.runs} runs, ${s.failed_runs} failed, $${Number(s.cost_usd).toFixed(4)} spend.${errors.length ? ` Errors: ${errors.join("; ")}.` : ""} Span-level traces are in Langfuse${s.langfuse_url ? ` (${s.langfuse_url})` : ` under session id ${s.id}`}.`;
+      return `Session ${s.id} (${s.agent_name}, ${s.environment}) ${s.status}: ${s.runs} runs, ${s.failed_runs} failed, $${Number(s.cost_usd).toFixed(4)} spend.${errors.length ? ` Errors: ${errors.join("; ")}.` : ""} Transcript: ${s.transcript_status}${s.transcript_lines ? ` (${s.transcript_lines} events)` : ""}. Span-level traces are in Langfuse${s.langfuse_url ? ` (${s.langfuse_url})` : ` under session id ${s.id}`}.`;
+    }
+    case "transcript":
+      return `Transcript for ${data.session_id} (${data.status}): events ${data.total ? data.offset + 1 : 0}-${data.offset + data.events.length} of ${data.total}.${data.download_url ? ` Download: ${data.download_url}` : ""}`;
+    case "trace": {
+      const errs = data.observations.filter((o) => o.level === "ERROR").map((o) => `${o.name}: ${o.statusMessage}`);
+      return `Run ${data.run.id} (${data.run.name}) ${data.run.status}: ${data.observations.length} spans in Langfuse trace ${data.trace.id}.${errs.length ? ` Errors: ${errs.join("; ")}.` : ""}`;
     }
   }
 }
@@ -131,6 +140,26 @@ export function createServer(): McpServer {
     annotations: readOnly,
     _meta: ui,
   }, (a) => runTool("get_agent_session", a));
+
+  registerAppTool(server, "get_session_transcript", {
+    title: "Agent session transcript",
+    description: "Read an agent session's JSONL transcript (user/assistant messages, tool calls and results, run boundaries) from object storage, a page at a time. Works for sealed and still-streaming sessions.",
+    inputSchema: {
+      session_id: z.string().describe("Session id, e.g. ses_00042"),
+      offset: z.number().int().min(0).optional().describe("Index of the first event (default 0)"),
+      limit: z.number().int().min(1).max(500).optional().describe("Events per page (default 50)"),
+    },
+    annotations: readOnly,
+    _meta: ui,
+  }, (a) => runTool("get_session_transcript", a));
+
+  registerAppTool(server, "get_run_trace", {
+    title: "Run trace (Langfuse)",
+    description: "Fetch a run's span tree live from Langfuse (agent steps, LLM generations with model/tokens, tool calls, retrievals, errors) and show it as a waterfall.",
+    inputSchema: { run_id: z.string().describe("Run id, e.g. run_00042") },
+    annotations: { readOnlyHint: true, openWorldHint: true },
+    _meta: ui,
+  }, (a) => runTool("get_run_trace", a));
 
   return server;
 }

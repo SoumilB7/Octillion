@@ -122,6 +122,15 @@ FROM (
   CROSS JOIN LATERAL generate_series(1, (s.metadata->>'turns_planned')::int) AS c(turn)
 ) t;
 
+-- Shift a few sessions so their last run finished minutes ago: these stay 'active' (transcript still streaming).
+WITH shift AS (
+  SELECT session_id, now() - interval '3 minutes' - max(started_at) AS delta
+    FROM trace_runs WHERE session_id IN ('ses_00007', 'ses_00042', 'ses_00123') GROUP BY session_id
+), runs AS (
+  UPDATE trace_runs r SET started_at = r.started_at + shift.delta FROM shift WHERE r.session_id = shift.session_id
+)
+UPDATE agent_sessions s SET started_at = s.started_at + shift.delta FROM shift WHERE s.id = shift.session_id;
+
 -- Derive session status/end from its runs: a failed last run fails the session; very recent sessions are still active.
 UPDATE agent_sessions s SET
   ended_at = CASE WHEN x.last_end > now() - interval '15 minutes' THEN NULL ELSE x.last_end END,

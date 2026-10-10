@@ -2,53 +2,78 @@
 
 A Postgres-backed MCP server with an interactive MCP-UI (MCP Apps) dashboard for four contexts:
 
-| Context | Tables | MCP tool(s) |
+| Context | Where it lives | MCP tool(s) |
 |---|---|---|
-| DevTools product description | `products` | `get_product_overview` |
-| User account | `user_accounts` | `get_user_account` (omit `email` to list all) |
-| Developer population breakdown | `developer_segments` | `get_developer_population` |
-| Trace runs history | `agent_sessions`, `trace_runs` | `list_trace_runs`, `get_agent_session` |
+| DevTools product description | Postgres `products` | `get_product_overview` |
+| User account | Postgres `user_accounts` | `get_user_account` (omit `email` to list all) |
+| Developer population breakdown | Postgres `developer_segments` | `get_developer_population` |
+| Trace runs history | Postgres `agent_sessions` + `trace_runs` (summaries)<br>Object storage (session transcripts, JSONL)<br>Langfuse (span-level traces) | `list_trace_runs`, `get_agent_session`, `get_session_transcript`, `get_run_trace` |
 
-Span-level trace detail stays in **Langfuse**. Postgres keeps agent sessions plus run-level summaries (status, latency, tokens, cost, error). Each run stores its `langfuse_trace_id`, and each session id doubles as its Langfuse session id. When `LANGFUSE_PROJECT_ID` is set, the UI and tool output include deep links.
+Every tool returns two things: a text summary plus JSON for the model, and `structuredContent` for the UI. All tools point at one UI resource, `ui://devtools/dashboard.html` (`text/html;profile=mcp-app`). It's built with `@mcp-ui/server` and the MCP Apps adapter enabled. The widget can also call tools itself, so you can click through from runs to a session, its transcript, and a run's span waterfall.
 
-Every tool returns two things: a text summary plus JSON for the model, and `structuredContent` for the UI. All tools point at one UI resource, `ui://devtools/dashboard.html` (`text/html;profile=mcp-app`). It's built with `@mcp-ui/server` and the MCP Apps adapter enabled. The widget picks its view from the tool result. It can also call tools itself: clicking a run opens its session, clicking a session opens its run timeline, and filter changes refetch the data.
+## Where trace data lives
+
+```
+agent_sessions ──< trace_runs                          Postgres: what you filter, sort and aggregate
+     │                 └─ langfuse_trace_id ──────────▶ Langfuse: span tree per run (OTel)
+     ├─ id (= Langfuse session id) ───────────────────▶ Langfuse: session view
+     └─ transcript_key ───────────────────────────────▶ Object storage: sessions/acct_<id>/<yyyy>/<mm>/<session>.jsonl.gz
+        session_transcript_parts (while streaming) ───▶                    .../<session>/part-00001.jsonl.gz
+```
+
+**Session transcripts.** Postgres stores a pointer, not the JSONL:
+- **While a session runs** (`transcript_status = 'streaming'`), each append writes a gzipped part plus a `session_transcript_parts` row. Readers can follow a live session by reading the parts in order.
+- **On seal**, the parts are merged into one object. Duplicate `seq` values from retried writes are dropped. `transcript_key`, `transcript_lines`, `transcript_bytes` and `transcript_sha256` are recorded, and the parts are deleted.
+- **On read**, the sha256 is verified, and S3 backends return a 15-minute presigned download URL.
+- The code is in `src/transcripts.ts` (`appendTranscript`, `sealTranscript`, `readTranscript`).
+
+**Langfuse.** Runs are sent as OpenTelemetry spans to `/api/public/otel/v1/traces`. Trace ID = `trace_runs.langfuse_trace_id` and session ID = `agent_sessions.id`. `get_run_trace` reads spans back through `/api/public/v2/observations`; Langfuse v4 disables the older `/api/public/traces` read API.
 
 ## Run it
 
+### Full local stack (Postgres + Langfuse + MinIO)
+
 ```bash
 npm install
-npm run smoke        # end-to-end MCP test of every tool + the UI resource
-npm start            # stdio MCP server
-npm run start:http   # Streamable HTTP at http://127.0.0.1:3333/mcp + browser preview at /preview
+cp .env.example .env
+npm run setup:local   # docker compose up, seed Postgres + transcripts, send traces to Langfuse
+npm run smoke         # end-to-end MCP test of every tool, incl. transcripts and Langfuse
+npm start             # stdio MCP server
+npm run start:http    # Streamable HTTP at http://127.0.0.1:3333/mcp + browser preview at /preview
 ```
 
-### Database
+| Service | URL | Login |
+|---|---|---|
+| Langfuse | http://localhost:3000 | `admin@devtools.local` / `devtools-admin` (project `devtools`) |
+| MinIO console | http://localhost:9091 | `minio` / `miniosecret` (buckets `langfuse`, `transcripts`) |
+| Postgres | `localhost:5432` | `postgres` / `postgres`, databases `devtools` and `langfuse` |
 
-- **No setup (default):** if `DATABASE_URL` is unset, the server uses embedded [PGlite](https://pglite.dev), which is real Postgres compiled to WASM, stored in `.pglite/`. Only one process can open that directory at a time, so don't run `start` and `start:http` together on it.
-- **Real Postgres:** `cp .env.example .env`, then `npm run db:up` (docker compose, Postgres 17).
+`docker-compose.yml` is based on Langfuse's official v4 compose file. It shares one Postgres (separate databases) and one MinIO (separate buckets) between Langfuse and this app. All credentials are local-only defaults. Stop it with `npm run stack:down`; add `-v` to `docker compose down` to wipe the data.
 
-Either way, the schema and seed data load automatically the first time the database is empty. Run `npm run db:reset` to drop and reseed. The seed timestamps are relative to `now()`, so the history always looks recent.
+After `npm run db:reset`, run `npm run langfuse:seed` again. Seed timestamps are relative to `now()`, and Langfuse v4 treats a re-sent span with a new start time as a new event, so the script first deletes the old traces and waits for that to finish (about 2 minutes).
+
+### Zero setup (no Docker)
+
+Without a `.env`, the server uses embedded [PGlite](https://pglite.dev) (Postgres compiled to WASM, in `.pglite/`) and stores transcripts on disk in `.transcripts/`. Langfuse links and `get_run_trace` are turned off. Only one process can open `.pglite/` at a time.
 
 ### Connect a host
 
-Add the server to any MCP host that renders MCP Apps / MCP-UI (e.g. Claude, VS Code, Goose, MCPJam). See `mcp.example.json`:
-
-```json
-{ "mcpServers": { "devtools": { "command": "npx", "args": ["tsx", "/abs/path/to/src/stdio.ts"] } } }
-```
-
-You can also point the host at `http://127.0.0.1:3333/mcp`. To look at the UI without a host, open `http://127.0.0.1:3333/preview/<tool>?<args>`, e.g. `/preview/get_agent_session?session_id=ses_00091`.
+Add the server to any MCP host that renders MCP Apps / MCP-UI (e.g. Claude, VS Code, Goose, MCPJam). See `mcp.example.json`, which loads `.env` with `--env-file-if-exists`. Don't use `npm start` as the host command, because npm prints to stdout and breaks the stdio protocol. You can also point the host at `http://127.0.0.1:3333/mcp`. To look at the UI without a host, open `http://127.0.0.1:3333/preview/<tool>?<args>`, e.g. `/preview/get_session_transcript?session_id=ses_00091`.
 
 ## Layout
 
 ```
-sql/schema.sql      tables for the four contexts
-sql/seed.sql        sample data (product "Tracelight", 8 accounts, population segments, ~260 sessions / ~900 runs)
-src/db.ts           pg or PGlite behind one query() interface; auto-seeds
-src/queries.ts      one query module per context + Langfuse link builder
-src/server.ts       MCP tools + UI resource registration
-src/ui/widget.html  the MCP-UI dashboard (product, accounts, population, runs, session views)
-src/stdio.ts        stdio transport
-src/http.ts         Streamable HTTP transport + local preview
-scripts/smoke.ts    end-to-end test through an MCP client
+sql/schema.sql            tables for the four contexts + transcript pointer/parts
+sql/seed.sql              sample data (product "Tracelight", 8 accounts, segments, 260 sessions / 919 runs)
+docker-compose.yml        Postgres + Langfuse v4 (web, worker, ClickHouse, Redis, MinIO)
+src/db.ts                 pg or PGlite behind one query()/transaction() interface; auto-seeds
+src/storage.ts            S3/MinIO or local-disk object store
+src/transcripts.ts        append / seal / read session JSONL
+src/langfuse.ts           Langfuse links, OTLP export, v2 observations reads
+src/queries.ts            one query per context
+src/server.ts             MCP tools + UI resource registration
+src/ui/widget.html        the MCP-UI dashboard
+src/seed-transcripts.ts   sample transcripts (runs on every DB seed)
+scripts/seed-langfuse.ts  send seeded runs to Langfuse as OTel spans
+scripts/smoke.ts          end-to-end test through an MCP client
 ```

@@ -1,18 +1,157 @@
+# Local dev stack: Postgres for this app + a self-hosted Langfuse v4.
+# Based on https://github.com/langfuse/langfuse/blob/main/docker-compose.yml
+# All credentials below are local-only defaults; do not reuse them anywhere real.
+#
+#   devtools app DB  postgres://postgres:postgres@localhost:5432/devtools
+#   Langfuse UI      http://localhost:3000   (admin@devtools.local / devtools-admin)
+#   MinIO (S3)       http://localhost:9090   buckets: langfuse, transcripts
+#
+# Redis, ClickHouse and the Langfuse worker are only reachable inside the compose network.
+#
+# Values are written literally (no ${VAR} interpolation) so this project's .env,
+# which also defines DATABASE_URL, can't leak into the Langfuse containers.
+
+x-langfuse-env: &langfuse-env
+  NEXTAUTH_URL: http://localhost:3000
+  DATABASE_URL: postgresql://postgres:postgres@postgres:5432/langfuse
+  SALT: devtools-local-salt
+  ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+  TELEMETRY_ENABLED: "false"
+  CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_USER: clickhouse
+  CLICKHOUSE_PASSWORD: clickhouse
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: miniosecret
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_AUTH: myredissecret
+
+x-langfuse-depends-on: &langfuse-depends-on
+  postgres:
+    condition: service_healthy
+  minio:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+  clickhouse:
+    condition: service_healthy
+
 services:
   postgres:
-    image: postgres:17
+    image: docker.io/postgres:17
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: devtools
-      POSTGRES_PASSWORD: devtools
-      POSTGRES_DB: devtools
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+      TZ: UTC
+      PGTZ: UTC
     ports:
-      - "5432:5432"
+      - 127.0.0.1:5432:5432
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/00-databases.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U devtools"]
-      interval: 2s
-      retries: 15
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: cgr.dev/chainguard/minio
+    restart: unless-stopped
+    entrypoint: sh
+    # Buckets are plain directories: 'langfuse' for Langfuse, 'transcripts' for session JSONL.
+    command: -c 'mkdir -p /data/langfuse /data/transcripts && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: miniosecret
+    ports:
+      - 127.0.0.1:9090:9000
+      - 127.0.0.1:9091:9001
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: docker.io/redis:7
+    restart: unless-stopped
+    command: --requirepass myredissecret --maxmemory-policy noeviction
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "myredissecret", "ping"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:25.12
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  langfuse-worker:
+    image: docker.langfuse.com/langfuse/langfuse-worker:4
+    restart: unless-stopped
+    depends_on: *langfuse-depends-on
+    environment:
+      <<: *langfuse-env
+
+  langfuse-web:
+    image: docker.langfuse.com/langfuse/langfuse:4
+    restart: unless-stopped
+    depends_on: *langfuse-depends-on
+    ports:
+      - 127.0.0.1:3000:3000
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_SECRET: devtools-local-nextauth-secret
+      LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://localhost:9090
+      LANGFUSE_S3_MEDIA_UPLOAD_INTERNAL_ENDPOINT: http://minio:9000
+      # Headless init: fixed org/project/keys so the app's .env works out of the box.
+      LANGFUSE_INIT_ORG_ID: devtools-org
+      LANGFUSE_INIT_ORG_NAME: DevTools
+      LANGFUSE_INIT_PROJECT_ID: devtools
+      LANGFUSE_INIT_PROJECT_NAME: Tracelight
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-devtools-local
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-devtools-local
+      LANGFUSE_INIT_USER_EMAIL: admin@devtools.local
+      LANGFUSE_INIT_USER_NAME: DevTools Admin
+      LANGFUSE_INIT_USER_PASSWORD: devtools-admin
 
 volumes:
-  pgdata:
+  postgres_data:
+  minio_data:
+  redis_data:
+  clickhouse_data:
+  clickhouse_logs:

@@ -122,6 +122,15 @@
   .err-box { border-left: 3px solid var(--critical); background: var(--surface-2); padding: 8px 12px; border-radius: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   select { font: inherit; font-size: 13px; padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
 
+  .ev { display: grid; grid-template-columns: 130px 1fr; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--grid); }
+  .ev-meta { display: flex; flex-direction: column; font-size: 12px; }
+  .ev-type { font-weight: 600; color: var(--ink-2); }
+  .ev-user_message .ev-type { color: var(--accent); }
+  .ev-body { min-width: 0; }
+  .ev-run_end, .ev-session_start, .ev-session_end { background: var(--surface-2); padding-left: 8px; padding-right: 8px; border-radius: 6px; }
+  pre.code { margin: 4px 0 0; padding: 8px; background: var(--surface-2); border-radius: 6px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  @media (max-width: 560px) { .ev { grid-template-columns: 1fr; gap: 4px; } }
   #tip {
     position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--ink); color: var(--surface); font-size: 12px; padding: 6px 8px; border-radius: 6px;
@@ -275,7 +284,7 @@
       ["population", "Developers", "get_developer_population", {}],
       ["traces", "Trace runs", "list_trace_runs", {}],
     ];
-    const group = { accounts: "account", session: "traces" }[view] || view;
+    const group = { accounts: "account", session: "traces", transcript: "traces", trace: "traces" }[view] || view;
     return `<nav class="nav">
       ${history.length > 1 ? `<button class="back" data-back>← Back</button>` : ""}
       ${items.map(([v, label, tool, a]) => `<button data-tool="${tool}" data-args="${args(a)}" aria-current="${v === group}">${label}</button>`).join("")}
@@ -289,7 +298,7 @@
 
   function render(d) {
     tip.style.display = "none";
-    const views = { product: viewProduct, accounts: viewAccounts, account: viewAccount, population: viewPopulation, traces: viewTraces, session: viewSession };
+    const views = { product: viewProduct, accounts: viewAccounts, account: viewAccount, population: viewPopulation, traces: viewTraces, session: viewSession, transcript: viewTranscript, trace: viewTrace };
     const fn = views[d.view];
     app.innerHTML = nav(d.view) + (fn ? fn(d) : `<div class="empty">Unknown view: ${esc(d.view)}</div>`);
   }
@@ -538,6 +547,11 @@
           <div><h1>${esc(s.agent_name)}</h1><p class="sub">${esc(s.id)} · ${esc(s.environment)} · <a href="#" data-tool="get_user_account" data-args="${args({ email: s.email })}">${esc(s.email)}</a>${s.end_user_id ? ` · end user ${esc(s.end_user_id)}` : ""}</p></div>
           <div class="row">${statusPill(s.status)}<span class="badge">${new Date(s.started_at).toLocaleString()}</span>${lfLink(s.langfuse_url)}</div>
         </div>
+        ${s.transcript_status === "none" ? `<p class="muted" style="font-size:12px">No transcript recorded</p>` : `
+        <div class="spread" style="align-items:center">
+          <p class="sub" style="font-size:13px">Transcript: <strong>${esc(s.transcript_status)}</strong>${s.transcript_status === "sealed" ? ` · ${plural(s.transcript_lines, "event")} · ${compact(s.transcript_bytes)}B gzipped · <code style="font-size:11px">${esc(s.transcript_key)}</code>` : ""}</p>
+          <button class="btn" data-tool="get_session_transcript" data-args="${args({ session_id: s.id })}">Open transcript →</button>
+        </div>`}
       </div>
       <div class="grid">
         ${tile("Runs", num(s.runs), `${num(s.failed_runs)} failed`)}
@@ -553,17 +567,99 @@
         <div class="muted" style="font-size:12px">Gridlines at 25% intervals of ${ms(end)}</div>
       </div>
       <div class="card"><h2>Runs</h2><div class="table-wrap"><table>
-        <thead><tr><th>Turn</th><th>Status</th><th>Run</th><th class="num">Duration</th><th class="num">Tokens</th><th class="num">Cost</th><th>Langfuse trace</th></tr></thead>
-        <tbody>${runs.map((r, i) => `<tr>
+        <thead><tr><th>Turn</th><th>Status</th><th>Run</th><th class="num">Duration</th><th class="num">Tokens</th><th class="num">Cost</th><th>Trace</th></tr></thead>
+        <tbody>${runs.map((r, i) => `<tr class="clickable" data-tool="get_run_trace" data-args="${args({ run_id: r.id })}">
           <td class="num">${i + 1}</td>
           <td>${statusPill(r.status)}${r.error_message ? `<div class="muted" style="font-size:12px">${esc(r.error_message)}</div>` : ""}</td>
           <td>${esc(r.id)}</td>
           <td class="num">${ms(r.duration_ms)}</td>
           <td class="num">${compact(r.tokens_in + r.tokens_out)}</td>
           <td class="num">${usd(r.cost_usd)}</td>
-          <td>${r.langfuse_url ? lfLink(r.langfuse_url) : `<code class="muted" style="font-size:11px">${esc(r.langfuse_trace_id.slice(0, 12))}…</code>`}</td>
+          <td><span class="row" style="gap:10px"><span class="lf">Spans →</span>${lfLink(r.langfuse_url)}</span></td>
         </tr>`).join("")}</tbody>
       </table></div></div>
+    </div>`;
+  }
+
+  // ---------- Session transcript (JSONL from object storage) ----------
+  const EVENT_LABELS = { session_start: "Session start", user_message: "User", tool_call: "Tool call", tool_result: "Tool result",
+                         assistant_message: "Assistant", run_end: "Run end", session_end: "Session end" };
+
+  function eventBody(e) {
+    const json = (v) => `<pre class="code">${esc(typeof v === "string" ? v : JSON.stringify(v, null, 2))}</pre>`;
+    switch (e.type) {
+      case "user_message": case "assistant_message":
+        return `<div>${esc(e.content)}</div>${e.model ? `<div class="muted" style="font-size:12px">${esc(e.model)} · ${num(e.usage?.input_tokens)} in · ${num(e.usage?.output_tokens)} out</div>` : ""}`;
+      case "tool_call": return `<div><code>${esc(e.name)}</code></div>${json(e.input)}`;
+      case "tool_result": return e.error ? `<div class="err-box">${esc(e.error)}</div>` : `<div><code>${esc(e.name)}</code></div>${json(e.output)}`;
+      case "run_end": return `<div class="row">${statusPill(e.status)}<span class="muted">${esc(e.run_id)} · ${ms(e.duration_ms)}</span>${e.error ? `<span class="sub">${esc(e.error)}</span>` : ""}</div>`;
+      case "session_start": return `<div class="muted">${esc(e.agent)}${e.end_user_id ? ` · end user ${esc(e.end_user_id)}` : ""}</div>`;
+      case "session_end": return `<div>${statusPill(e.status)}</div>`;
+      default: return json(e);
+    }
+  }
+
+  function viewTranscript(t) {
+    const t0 = t.events[0] ? new Date(t.events[0].ts).getTime() : 0;
+    const pager = (off, label) => `<button class="btn" data-tool="get_session_transcript" data-args="${args({ session_id: t.session_id, offset: off, limit: t.limit })}">${label}</button>`;
+    const rows = t.events.map((e) => `
+      <div class="ev ev-${esc(e.type)}">
+        <div class="ev-meta"><span class="ev-type">${esc(EVENT_LABELS[e.type] || e.type)}</span><span class="muted">#${e.seq} · +${ms(new Date(e.ts).getTime() - t0)}</span></div>
+        <div class="ev-body">${eventBody(e)}</div>
+      </div>`).join("");
+    return `<div class="stack">
+      <div class="card stack">
+        <div class="spread">
+          <div><h1>Transcript</h1><p class="sub"><a href="#" data-tool="get_agent_session" data-args="${args({ session_id: t.session_id })}">${esc(t.session_id)}</a> · ${esc(t.status)}</p></div>
+          <div class="row">${t.download_url ? `<a href="#" class="lf" data-link="${esc(t.download_url)}">Download .jsonl.gz ↗</a>` : ""}</div>
+        </div>
+        ${t.key ? `<p class="muted" style="font-size:12px"><code>${esc(t.key)}</code> · ${compact(t.bytes)}B · sha256 ${esc(String(t.sha256).slice(0, 12))}…</p>` : `<p class="muted" style="font-size:12px">${t.status === "streaming" ? "Session still running; reading live parts" : "No transcript stored"}</p>`}
+      </div>
+      <div class="card">
+        <div class="spread"><h2>Events ${t.total ? `${t.offset + 1}–${t.offset + t.events.length} of ${t.total}` : ""}</h2>
+          <div class="row">${t.offset > 0 ? pager(Math.max(0, t.offset - t.limit), "← Prev") : ""}${t.offset + t.events.length < t.total ? pager(t.offset + t.limit, "Next →") : ""}</div>
+        </div>
+        ${rows || `<div class="empty">No events</div>`}
+      </div>
+    </div>`;
+  }
+
+  // ---------- Run trace (span waterfall fetched live from Langfuse) ----------
+  const OBS_COLORS = { AGENT: "var(--s1)", SPAN: "var(--s1)", GENERATION: "var(--s2)", TOOL: "var(--s3)", RETRIEVER: "var(--s4)" };
+
+  function viewTrace({ run: r, trace, observations }) {
+    const t0 = new Date(trace.timestamp).getTime();
+    const endOf = (o) => (o.endTime ? new Date(o.endTime).getTime() : new Date(o.startTime).getTime());
+    const total = Math.max(...observations.map((o) => endOf(o) - t0), r.duration_ms, 1);
+    const depth = new Map();
+    const byId = new Map(observations.map((o) => [o.id, o]));
+    const d = (o) => (depth.has(o.id) ? depth.get(o.id) : (depth.set(o.id, o.parentObservationId && byId.has(o.parentObservationId) ? d(byId.get(o.parentObservationId)) + 1 : 0), depth.get(o.id)));
+    const sorted = [...observations].sort((a, b) => new Date(a.startTime) - new Date(b.startTime) || d(a) - d(b));
+    const rows = sorted.map((o) => {
+      const start = new Date(o.startTime).getTime() - t0;
+      const dur = endOf(o) - new Date(o.startTime).getTime();
+      const err = o.level === "ERROR";
+      const usage = o.usageDetails && (o.usageDetails.input || o.usageDetails.output) ? `\n${num(o.usageDetails.input)} in · ${num(o.usageDetails.output)} out tokens` : "";
+      const t = `${o.name} (${o.type.toLowerCase()})\n${err ? "✕ error" : "✓ ok"} · starts +${ms(start)} · ${ms(dur)}${o.model ? "\n" + o.model : ""}${usage}${o.statusMessage ? "\n" + o.statusMessage : ""}`;
+      return `<div class="name" style="padding-left:${d(o) * 14}px" title="${esc(o.name)}">${err ? "✕ " : ""}${esc(o.name)}</div>
+        <div class="lane" data-tip="${esc(t)}"><div class="span" style="left:${(start / total) * 100}%;width:${Math.max((dur / total) * 100, 0.5)}%;background:${OBS_COLORS[o.type] || "var(--muted)"};${err ? "outline:2px solid var(--critical);outline-offset:1px" : ""}"></div></div>
+        <div class="num muted" style="text-align:right;font-variant-numeric:tabular-nums">${ms(dur)}</div>`;
+    }).join("");
+    const types = [...new Set(observations.map((o) => o.type))];
+    return `<div class="stack">
+      <div class="card stack">
+        <div class="spread">
+          <div><h1>${esc(trace.name || r.name)}</h1><p class="sub">${esc(r.id)} · <a href="#" data-tool="get_agent_session" data-args="${args({ session_id: r.session_id })}">${esc(r.session_id)}</a> · ${esc(r.environment)}</p></div>
+          <div class="row">${statusPill(r.status)}${lfLink(r.langfuse_url)}</div>
+        </div>
+        ${r.error_message ? `<div class="err-box">${esc(r.error_message)}</div>` : ""}
+      </div>
+      <div class="card stack">
+        <div class="spread"><h2 style="margin:0">Spans · from Langfuse</h2>
+          <div class="legend">${types.map((k) => `<span><i style="background:${OBS_COLORS[k] || "var(--muted)"}"></i>${esc(k.toLowerCase())}</span>`).join("")}</div>
+        </div>
+        ${observations.length ? `<div class="wf">${rows}</div><div class="muted" style="font-size:12px">Gridlines at 25% intervals of ${ms(total)}</div>` : `<div class="empty">Langfuse has no spans for this trace yet</div>`}
+      </div>
     </div>`;
   }
 
