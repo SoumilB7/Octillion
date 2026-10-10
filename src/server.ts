@@ -25,6 +25,8 @@ export const handlers = {
   get_session_transcript: (a: { session_id: string; offset?: number; limit?: number }) =>
     q.getSessionTranscript(a.session_id, a.offset, a.limit),
   get_run_trace: (a: { run_id: string }) => q.getRunTrace(a.run_id),
+  search_transcripts: ({ session_id, ...a }: q.TranscriptSearchInput & { session_id?: string }) =>
+    q.searchSessionTranscripts({ ...a, sessionId: a.sessionId ?? session_id }),
 } as const;
 export type ToolName = keyof typeof handlers;
 
@@ -50,6 +52,13 @@ function summarize(data: Awaited<ReturnType<(typeof handlers)[ToolName]>>): stri
     }
     case "transcript":
       return `Transcript for ${data.session_id} (${data.status}): events ${data.total ? data.offset + 1 : 0}-${data.offset + data.events.length} of ${data.total}.${data.download_url ? ` Download: ${data.download_url}` : ""}`;
+    case "search": {
+      if (!data.results)
+        return `Transcript search index: ${data.index.events} events from ${data.index.sessions} sealed sessions across ${data.index.partitions.length} monthly partitions and ${data.index.folders.length} bucket folders (account_id/date/env/agent). Pass a query to search.`;
+      const r = data.results;
+      const top = r.hits.slice(0, 5).map((h) => `${h.session_id}#${h.seq} (${h.type}, ${h.agent}): ${h.text.slice(0, 120)}`);
+      return `${r.total} transcript events match "${data.query}" (${data.filters.mode}).${top.length ? ` Top: ${top.join(" | ")}` : ""}`;
+    }
     case "trace": {
       const errs = data.observations.filter((o) => o.level === "ERROR").map((o) => `${o.name}: ${o.statusMessage}`);
       return `Run ${data.run.id} (${data.run.name}) ${data.run.status}: ${data.observations.length} spans in Langfuse trace ${data.trace.id}.${errs.length ? ` Errors: ${errs.join("; ")}.` : ""}`;
@@ -154,6 +163,24 @@ export function createServer(): McpServer {
     annotations: readOnly,
     _meta: ui,
   }, (a) => runTool("get_session_transcript", a));
+
+  registerAppTool(server, "search_transcripts", {
+    title: "Search session transcripts",
+    description: "Full-text search across all sealed agent-session transcripts (user and assistant messages, tool calls and results, errors), backed by a ClickHouse full-text index fed from the transcript bucket. Case-insensitive. mode 'all' needs every word, 'any' needs one, 'phrase' needs the exact phrase. Omit query to see index stats and the bucket's partition folders.",
+    inputSchema: {
+      query: z.string().optional().describe("Words to search for, e.g. 'RateLimitError' or 'parental leave'"),
+      mode: z.enum(["all", "any", "phrase"]).optional().describe("Default 'all'"),
+      email: z.string().optional().describe("Only this account's sessions"),
+      agent: z.string().optional().describe("Agent name, e.g. support-agent"),
+      environment: z.enum(["production", "staging", "dev"]).optional(),
+      type: z.enum(["user_message", "assistant_message", "tool_call", "tool_result", "run_end", "session_start", "session_end"]).optional(),
+      session_id: z.string().optional(),
+      days: z.number().int().min(1).max(365).optional().describe("Only sessions started in the last N days"),
+      limit: z.number().int().min(1).max(200).optional().describe("Max hits (default 25)"),
+    },
+    annotations: readOnly,
+    _meta: ui,
+  }, (a) => runTool("search_transcripts", a));
 
   registerAppTool(server, "get_run_trace", {
     title: "Run trace (Langfuse)",

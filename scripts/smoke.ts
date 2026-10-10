@@ -63,16 +63,18 @@ assert.ok(live.total > 0 && live.key === null);
   const { getDb } = await import("../src/db.js");
   const { getStore } = await import("../src/storage.js");
   const { appendTranscript, sealTranscript } = await import("../src/transcripts.js");
+  const { removeFromIndex, searchEnabled } = await import("../src/search.js");
   const db = await getDb();
   const id = `ses_smoke_${Date.now()}`;
+  const token = `quokka${Date.now()}`; // unique word to find via search
   await db.query(
     "INSERT INTO agent_sessions (id, account_id, agent_name, environment, status, started_at) VALUES ($1, 1, 'smoke', 'dev', 'active', now())",
     [id],
   );
   try {
     const ts = new Date().toISOString();
-    await appendTranscript(db, id, [{ ts, type: "session_start" }, { ts, type: "user_message", content: "smoke ping" }]);
-    await appendTranscript(db, id, [{ seq: 2, ts, type: "user_message", content: "smoke ping" }]); // retried write
+    await appendTranscript(db, id, [{ ts, type: "session_start" }, { ts, type: "user_message", content: `smoke ping ${token}` }]);
+    await appendTranscript(db, id, [{ seq: 2, ts, type: "user_message", content: `smoke ping ${token}` }]); // retried write
     await appendTranscript(db, id, [{ ts, type: "session_end", status: "completed" }]);
     const sealedNow = await sealTranscript(db, id);
     const after = await call("get_session_transcript", { session_id: id, limit: 500 });
@@ -82,10 +84,38 @@ assert.ok(live.total > 0 && live.key === null);
     const [{ parts }] = await db.query<{ parts: number }>("SELECT count(*) AS parts FROM session_transcript_parts WHERE session_id = $1", [id]);
     assert.equal(parts, 0, "parts removed after seal");
     await assert.rejects(appendTranscript(db, id, [{ ts, type: "user_message" }]), /sealed/, "sealed transcripts are read-only");
+    assert.match(sealedNow.key, /^sessions\/account_id=1\/date=\d{4}-\d{2}-\d{2}\/env=dev\/agent=smoke\//, "partitioned key");
+    if (searchEnabled()) {
+      assert.ok(sealedNow.indexed, "indexed on seal");
+      const found = await call("search_transcripts", { query: token.toUpperCase() });
+      assert.equal(found.results.total, 1, "sealed transcript searchable right away (dedupe kept one copy)");
+      assert.equal(found.results.hits[0].session_id, id);
+    }
     await (await getStore()).delete([sealedNow.key]);
   } finally {
+    if (searchEnabled()) await removeFromIndex(id);
     await db.query("DELETE FROM agent_sessions WHERE id = $1", [id]);
   }
+}
+
+// Full-text search over transcripts (ClickHouse), when configured
+if ((await import("../src/search.js")).searchEnabled()) {
+  const overview = await call("search_transcripts", {});
+  assert.ok(overview.index.events > 0 && overview.index.folders.length > 0, "index stats + bucket folders");
+  assert.ok(overview.index.folders.every((f: any) => f.account_id > 0 && f.env && f.agent), "folder columns from hive paths");
+  const all = await call("search_transcripts", { query: "ratelimiterror" });
+  assert.ok(all.results.total > 0);
+  assert.ok(all.results.hits.every((h: any) => /ratelimiterror/i.test(h.text)), "every hit contains the token");
+  const phrase = await call("search_transcripts", { query: "model provider", mode: "phrase" });
+  const reversed = await call("search_transcripts", { query: "provider model", mode: "phrase" });
+  assert.ok(phrase.results.total > 0 && reversed.results.total === 0, "phrase respects word order");
+  const any = await call("search_transcripts", { query: "northwind contoso", mode: "any" });
+  const both = await call("search_transcripts", { query: "northwind contoso", mode: "all" });
+  assert.ok(any.results.total > both.results.total, "any >= all");
+  const scoped = await call("search_transcripts", { query: "ratelimiterror", email: "priya@acme.dev", type: "run_end" });
+  assert.ok(scoped.results.hits.every((h: any) => h.email === "priya@acme.dev" && h.type === "run_end"), "filters applied");
+} else {
+  console.log("- search_transcripts skipped (ClickHouse not configured)");
 }
 
 // Langfuse: live span tree for a run (only when the Langfuse API is configured)

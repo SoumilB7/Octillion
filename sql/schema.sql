@@ -67,8 +67,8 @@ CREATE TABLE agent_sessions (
   started_at    TIMESTAMPTZ NOT NULL,
   ended_at      TIMESTAMPTZ,                    -- NULL while active
   metadata      JSONB NOT NULL DEFAULT '{}',
-  -- Transcript pointer. The key is relative to the configured bucket (or .transcripts/ on disk),
-  -- e.g. sessions/acct_1/2026/10/ses_00091.jsonl.gz, so storage can move without rewriting rows.
+  -- Transcript pointer. The key is relative to the configured bucket (or .transcripts/ on disk) and uses
+  -- Hive-style partition folders, e.g. sessions/account_id=1/date=2026-10-09/env=production/agent=rag-qa/ses_00091.jsonl.gz
   transcript_status    TEXT NOT NULL DEFAULT 'none'
                        CHECK (transcript_status IN ('none', 'streaming', 'sealed', 'expired')),
   transcript_key       TEXT,                    -- set once sealed
@@ -76,6 +76,7 @@ CREATE TABLE agent_sessions (
   transcript_bytes     BIGINT,                  -- compressed size
   transcript_sha256    TEXT,                    -- of the compressed object
   transcript_sealed_at TIMESTAMPTZ,
+  transcript_indexed_at TIMESTAMPTZ,            -- when its events landed in ClickHouse search
   CHECK ((transcript_status = 'sealed') = (transcript_key IS NOT NULL))
 );
 CREATE INDEX agent_sessions_account_started_idx ON agent_sessions (account_id, started_at DESC);

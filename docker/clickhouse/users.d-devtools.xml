@@ -1,0 +1,23 @@
+<!-- Mounted as /etc/clickhouse-server/users.d/devtools.xml: a dedicated user for transcript search
+     when using the local stack's ClickHouse, limited to the devtools database. Local-only password.
+     To use ClickHouse Cloud instead, see CLICKHOUSE_URL / CLICKHOUSE_CREDENTIALS_FILE in .env.example. -->
+<clickhouse>
+  <profiles>
+    <devtools>
+      <enable_full_text_index>1</enable_full_text_index>
+    </devtools>
+  </profiles>
+  <users>
+    <devtools>
+      <password>devtools</password>
+      <profile>devtools</profile>
+      <networks><ip>::/0</ip></networks>
+      <grants>
+        <query>GRANT ALL ON devtools.*</query>
+        <!-- index stats (part/index sizes) for the search view -->
+        <query>GRANT SELECT ON system.parts</query>
+        <query>GRANT SELECT ON system.data_skipping_indices</query>
+      </grants>
+    </devtools>
+  </users>
+</clickhouse>

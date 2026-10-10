@@ -131,6 +131,10 @@
   pre.code { margin: 4px 0 0; padding: 8px; background: var(--surface-2); border-radius: 6px; font-size: 12px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
   @media (max-width: 560px) { .ev { grid-template-columns: 1fr; gap: 4px; } }
+  mark { background: color-mix(in srgb, var(--s4) 35%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
+  input[type="search"] { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
+  .ev.clickable:hover { background: var(--surface-2); }
+  .btn[aria-current="true"] { background: var(--ink); color: var(--surface); }
   #tip {
     position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--ink); color: var(--surface); font-size: 12px; padding: 6px 8px; border-radius: 6px;
@@ -266,7 +270,18 @@
     const back = e.target.closest("[data-back]");
     if (back && history.length > 1) { history.pop(); render(history[history.length - 1]); }
   });
+  app.addEventListener("submit", (e) => {
+    const form = e.target.closest("form[data-search]");
+    if (!form) return;
+    e.preventDefault();
+    const fd = new FormData(form);
+    const params = {};
+    for (const [k, v] of fd.entries()) if (v !== "") params[k] = v;
+    callTool("search_transcripts", params);
+  });
+
   app.addEventListener("change", (e) => {
+    if (e.target.closest("form[data-search]")) return;
     const f = e.target.closest("[data-filter]");
     if (!f) return;
     const current = history[history.length - 1];
@@ -283,6 +298,7 @@
       ["account", "Accounts", "get_user_account", {}],
       ["population", "Developers", "get_developer_population", {}],
       ["traces", "Trace runs", "list_trace_runs", {}],
+      ["search", "Search", "search_transcripts", {}],
     ];
     const group = { accounts: "account", session: "traces", transcript: "traces", trace: "traces" }[view] || view;
     return `<nav class="nav">
@@ -298,7 +314,7 @@
 
   function render(d) {
     tip.style.display = "none";
-    const views = { product: viewProduct, accounts: viewAccounts, account: viewAccount, population: viewPopulation, traces: viewTraces, session: viewSession, transcript: viewTranscript, trace: viewTrace };
+    const views = { product: viewProduct, accounts: viewAccounts, account: viewAccount, population: viewPopulation, traces: viewTraces, session: viewSession, transcript: viewTranscript, trace: viewTrace, search: viewSearch };
     const fn = views[d.view];
     app.innerHTML = nav(d.view) + (fn ? fn(d) : `<div class="empty">Unknown view: ${esc(d.view)}</div>`);
   }
@@ -659,6 +675,110 @@
           <div class="legend">${types.map((k) => `<span><i style="background:${OBS_COLORS[k] || "var(--muted)"}"></i>${esc(k.toLowerCase())}</span>`).join("")}</div>
         </div>
         ${observations.length ? `<div class="wf">${rows}</div><div class="muted" style="font-size:12px">Gridlines at 25% intervals of ${ms(total)}</div>` : `<div class="empty">Langfuse has no spans for this trace yet</div>`}
+      </div>
+    </div>`;
+  }
+
+  // ---------- Transcript search (ClickHouse full-text index over the bucket) ----------
+  const EVENT_TYPES = ["user_message", "assistant_message", "tool_call", "tool_result", "run_end", "session_start", "session_end"];
+
+  /** Escape text and wrap query tokens in <mark>, matching case-insensitively on the raw text. */
+  function highlight(text, query) {
+    const tokens = [...new Set(String(query).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean))];
+    if (!tokens.length) return esc(text);
+    const re = new RegExp(tokens.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"), "giu");
+    let out = "", last = 0;
+    for (const m of String(text).matchAll(re)) {
+      out += esc(text.slice(last, m.index)) + `<mark>${esc(m[0])}</mark>`;
+      last = m.index + m[0].length;
+    }
+    return out + esc(text.slice(last));
+  }
+
+  /** Window of text around the first match, so long tool payloads stay readable. */
+  function snippet(text, query, width = 240) {
+    const lower = text.toLowerCase();
+    const first = String(query).toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean)
+      .map((t) => lower.indexOf(t)).filter((i) => i >= 0).sort((a, b) => a - b)[0] ?? 0;
+    const start = Math.max(0, first - width / 3);
+    return (start > 0 ? "…" : "") + text.slice(start, start + width) + (start + width < text.length ? "…" : "");
+  }
+
+  function viewSearch(d) {
+    const f = d.filters || {};
+    const opt = (v, l, cur) => `<option value="${esc(v)}" ${String(cur ?? "") === String(v) ? "selected" : ""}>${esc(l)}</option>`;
+    const keep = (extra) => ({ query: d.query, mode: f.mode, email: f.email, agent: f.agent, environment: f.environment, type: f.type, days: f.days, ...extra });
+    const form = `<form class="card stack" data-search>
+        <div class="row" style="gap:8px">
+          <input name="query" type="search" value="${esc(d.query)}" placeholder="Search transcripts, e.g. RateLimitError or parental leave" style="flex:1;min-width:220px" autofocus>
+          <select name="mode">${opt("all", "All words", f.mode)}${opt("any", "Any word", f.mode)}${opt("phrase", "Exact phrase", f.mode)}</select>
+          <button class="btn" type="submit">Search</button>
+        </div>
+        <div class="row" style="gap:8px">
+          <select name="type">${opt("", "Any event")}${EVENT_TYPES.map((t) => opt(t, t.replace("_", " "), f.type)).join("")}</select>
+          <select name="environment">${opt("", "Any env")}${["production", "staging", "dev"].map((e) => opt(e, e, f.environment)).join("")}</select>
+          <select name="days">${opt("", "All time")}${[[1, "Last 24h"], [7, "Last 7 days"], [30, "Last 30 days"]].map(([v, l]) => opt(v, l, f.days)).join("")}</select>
+          ${f.agent ? `<input type="hidden" name="agent" value="${esc(f.agent)}"><span class="badge">agent: ${esc(f.agent)}</span>` : ""}
+          ${f.email ? `<input type="hidden" name="email" value="${esc(f.email)}"><span class="badge">${esc(f.email)}</span>` : ""}
+        </div>
+      </form>`;
+
+    if (!d.results) {
+      const ix = d.index;
+      const byAccount = new Map();
+      for (const r of ix.folders) {
+        const a = byAccount.get(r.account_id) || { files: 0, months: new Set(), envs: new Set(), agents: new Set() };
+        a.files += r.files; a.months.add(r.month.slice(0, 7)); a.envs.add(r.env); a.agents.add(r.agent);
+        byAccount.set(r.account_id, a);
+      }
+      return `<div class="stack">${form}
+        <div class="grid">
+          ${tile("Indexed events", num(ix.events))}
+          ${tile("Sealed sessions", num(ix.sessions))}
+          ${tile("Full-text index", `${compact(ix.index_bytes)}B`, "ClickHouse text index")}
+          ${tile("Partitions", num(ix.partitions.length), ix.partitions.map((p) => p.partition).join(" · "))}
+        </div>
+        <div class="card stack">
+          <h2 style="margin:0">Bucket layout</h2>
+          <p class="sub" style="font-size:13px">Transcripts are filed under Hive-style partition folders. The indexer takes account, date, env and agent from the path and pushes events into ClickHouse${ix.clickhouse ? ` (${esc(ix.clickhouse)})` : ""}, so a reindex for one account or month only walks that part of the tree.</p>
+          <pre class="code">transcripts/
+  sessions/account_id=&lt;id&gt;/date=&lt;yyyy-mm-dd&gt;/env=&lt;env&gt;/agent=&lt;agent&gt;/&lt;session&gt;.jsonl.gz   sealed, indexed
+  parts/account_id=…/date=…/env=…/agent=…/&lt;session&gt;/part-00001.jsonl.gz                   live sessions</pre>
+          <div class="table-wrap"><table>
+            <thead><tr><th>account_id=</th><th class="num">Files</th><th>Months</th><th>env=</th><th>agent=</th></tr></thead>
+            <tbody>${[...byAccount].map(([id, a]) => `<tr>
+              <td>${id}</td><td class="num">${num(a.files)}</td><td>${[...a.months].sort().join(", ")}</td>
+              <td class="sub">${[...a.envs].sort().join(", ")}</td><td class="sub">${[...a.agents].sort().join(", ")}</td></tr>`).join("")}</tbody>
+          </table></div>
+        </div>
+      </div>`;
+    }
+
+    const r = d.results;
+    const chips = (key, items) => items.map((it) => `<button class="btn" data-tool="search_transcripts" data-args="${args(keep({ [key]: it.value }))}" aria-current="${f[key] === it.value}">${esc(it.value.replace("_", " "))} <span class="muted">${num(it.count)}</span></button>`).join("");
+    const hits = r.hits.map((h) => `
+      <div class="ev clickable" data-tool="get_session_transcript" data-args="${args({ session_id: h.session_id, offset: Math.max(0, h.seq - 3), limit: 20 })}" style="cursor:pointer">
+        <div class="ev-meta">
+          <span class="ev-type">${esc(EVENT_LABELS[h.type] || h.type)}</span>
+          <span class="muted">${esc(h.session_id)} #${h.seq}</span>
+          <span class="muted">${ago(h.ts)}</span>
+        </div>
+        <div class="ev-body">
+          <div style="word-break:break-word">${highlight(snippet(h.text, d.query), d.query)}</div>
+          <div class="muted" style="font-size:12px;margin-top:4px">${esc(h.agent)} · ${esc(h.environment)} · ${esc(h.email || `account ${h.account_id}`)}${h.run_id ? ` · ${esc(h.run_id)}` : ""}</div>
+        </div>
+      </div>`).join("");
+    return `<div class="stack">${form}
+      <div class="card stack">
+        <div class="spread" style="align-items:center">
+          <h2 style="margin:0">${num(r.total)} matching events</h2>
+          <span class="muted" style="font-size:12px">${r.stats.ms}ms · ${compact(r.stats.rows_read)} rows read</span>
+        </div>
+        ${r.facets.agent.length > 1 || f.agent ? `<div class="row" style="gap:6px"><span class="muted" style="font-size:12px;width:44px">Agent</span>${chips("agent", r.facets.agent)}${f.agent ? `<button class="btn" data-tool="search_transcripts" data-args="${args(keep({ agent: undefined }))}">✕ clear</button>` : ""}</div>` : ""}
+        ${r.facets.type.length > 1 || f.type ? `<div class="row" style="gap:6px"><span class="muted" style="font-size:12px;width:44px">Event</span>${chips("type", r.facets.type)}${f.type ? `<button class="btn" data-tool="search_transcripts" data-args="${args(keep({ type: undefined }))}">✕ clear</button>` : ""}</div>` : ""}
+      </div>
+      <div class="card">${hits || `<div class="empty">No transcript events match</div>`}
+        ${r.total > r.hits.length ? `<p class="muted" style="font-size:12px;margin-top:10px">Showing the ${r.hits.length} most recent of ${num(r.total)}. Narrow with filters.</p>` : ""}
       </div>
     </div>`;
   }

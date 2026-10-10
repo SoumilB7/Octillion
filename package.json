@@ -11,13 +11,15 @@
     "langfuse:seed": "tsx --env-file-if-exists=.env scripts/seed-langfuse.ts",
     "setup:local": "npm run stack:up && npm run db:reset && npm run langfuse:seed",
     "smoke": "tsx --env-file-if-exists=.env scripts/smoke.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "search:reindex": "tsx --env-file-if-exists=.env scripts/reindex-search.ts"
   },
   "description": "Postgres-backed MCP server with MCP-UI views for product, accounts, developer population and trace runs",
   "dependencies": {
     "@boatdev/sdk": "^1.9.2",
     "@aws-sdk/client-s3": "^3.1149.0",
     "@aws-sdk/s3-request-presigner": "^3.1149.0",
+    "@clickhouse/client": "^1.24.1",
     "@electric-sql/pglite": "^0.5.8",
     "@mcp-ui/server": "^6.1.0",
     "@modelcontextprotocol/ext-apps": "^0.3.1",
