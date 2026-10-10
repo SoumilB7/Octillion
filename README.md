@@ -28,21 +28,7 @@ The main MCP server exposes Boat sandbox tools through the official `@boatdev/sd
 
 Boat sandboxes use billable compute. Stop archives a sandbox so it can be resumed later; delete irreversibly removes a sandbox and its snapshots and requires repeating its ID for confirmation. Treat API keys, secrets, and returned desktop URLs as sensitive. Use a least-privilege Boat API key. See the [Boat TypeScript SDK guide](https://docs.boat.dev/sdks/typescript) for current SDK authentication and operations.
 
-This repository includes Codex skills in `.agents/skills/`: `$boat-sandboxes` for Boat workflows and `$python-mcp` for Python upstream setup and remote offload. Use `/skills` to browse project skills. These workflows are packaged as skills for direct invocation.
-
-### Python MCP upstream
-
-Octillion can proxy tools from a separately hosted Python MCP server over Streamable HTTP. This is the recommended setup when Python tools are CPU- or memory-intensive: their execution happens on the Python service, while Octillion handles MCP routing. Set `PYTHON_MCP_ENABLED=true` and `PYTHON_MCP_URL` to the service endpoint. For bearer-token authentication, set `PYTHON_MCP_AUTH_TOKEN`; it is sent only to HTTPS endpoints (or localhost). Keep the token in the ignored local `.env` or a secret manager.
-
-For local development, the router can launch a trusted Python MCP server over stdio instead. Set `PYTHON_MCP_COMMAND` and `PYTHON_MCP_ARGS`, for example:
-
-```env
-PYTHON_MCP_ENABLED=true
-PYTHON_MCP_COMMAND=python
-PYTHON_MCP_ARGS=["-m","my_mcp_server"]
-```
-
-In either mode, upstream tools appear with a `python_` prefix. The local subprocess receives only standard runtime variables (`PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_ALL`, `PYTHONPATH`) by default; add extras with `PYTHON_MCP_ENV` as a JSON object. Remote MCP is preferred for production offload because local stdio shares Octillion's host resources.
+Pi.dev is integrated as the agent client/runtime, replacing the embedded Python MCP bridge. The project config at `.pi/mcp.json` starts Octillion over stdio and exposes its tools through Pi codemode; scripts can compose calls and filter results before returning summaries to the model. This reduces model context and orchestration overhead while Octillion remains the API/data server. Pi project resources include the `/boat` and `/traces` prompt commands plus Octillion and Boat skills. Install Pi using the [Pi quickstart](https://pi.dev/docs/latest/quickstart), run `pi` from the repository, trust the project resources, and use `/mcp` to inspect the Octillion connection. See the [Pi MCP guide](https://pi.dev/docs/latest/mcp) for exposure behavior.
 
 ### Database
 
@@ -70,7 +56,6 @@ src/db.ts           pg or PGlite behind one query() interface; auto-seeds
 src/queries.ts      one query module per context + Langfuse link builder
 src/server.ts       MCP tools + UI resource registration
 src/boat-tools.ts     boat.dev sandbox tools
-src/python-mcp.ts     optional remote or stdio Python MCP upstream router
 src/ui/widget.html  the MCP-UI dashboard (product, accounts, population, runs, session views)
 src/stdio.ts        stdio transport
 src/http.ts         Streamable HTTP transport + local preview

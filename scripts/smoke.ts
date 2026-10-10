@@ -6,7 +6,7 @@ import { createServer, WIDGET_URI } from "../src/server.js";
 import { getDb } from "../src/db.js";
 
 const [clientT, serverT] = InMemoryTransport.createLinkedPair();
-await (await createServer()).connect(serverT);
+await createServer().connect(serverT);
 const client = new Client({ name: "smoke", version: "1.0.0" });
 await client.connect(clientT);
 
