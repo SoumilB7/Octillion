@@ -12,6 +12,7 @@
   },
   "description": "Postgres-backed MCP server with MCP-UI views for product, accounts, developer population and trace runs",
   "dependencies": {
+    "@boatdev/sdk": "^1.9.2",
     "@electric-sql/pglite": "^0.5.8",
     "@mcp-ui/server": "^6.1.0",
     "@modelcontextprotocol/ext-apps": "^0.3.1",

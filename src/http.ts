@@ -12,7 +12,7 @@ app.use(express.json());
 
 // Streamable HTTP MCP endpoint (stateless: a fresh server + transport per request).
 app.post("/mcp", async (req, res) => {
-  const server = createServer();
+  const server = await createServer();
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
   res.on("close", () => {
     transport.close();

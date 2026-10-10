@@ -7,6 +7,8 @@ import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@model
 import { createUIResource } from "@mcp-ui/server";
 import { z } from "zod";
 import * as q from "./queries.js";
+import { registerPythonTools } from "./python-mcp.js";
+import { registerBoatTools } from "./boat-tools.js";
 
 export const WIDGET_URI = "ui://devtools/dashboard.html";
 export const WIDGET_HTML = readFileSync(
@@ -62,7 +64,7 @@ export async function runTool(name: ToolName, args: Record<string, unknown>): Pr
   }
 }
 
-export function createServer(): McpServer {
+export async function createServer(): Promise<McpServer> {
   const server = new McpServer({ name: "devtools-mcp", version: "1.0.0" });
 
   registerAppResource(
@@ -131,6 +133,9 @@ export function createServer(): McpServer {
     annotations: readOnly,
     _meta: ui,
   }, (a) => runTool("get_agent_session", a));
+
+  registerBoatTools(server);
+  await registerPythonTools(server);
 
   return server;
 }
